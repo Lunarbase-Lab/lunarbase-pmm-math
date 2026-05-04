@@ -8,12 +8,12 @@ bit-for-bit identical with the on-chain Solidity contract.
 
 ## Layout
 
-| Path | Crate / module | Purpose |
-| --- | --- | --- |
-| `math/rust/lunarbase-pmm-math/` | `lunarbase-pmm-math` (rlib) | Pure Rust core. Portable, no `unsafe`, no FFI. |
-| `math/rust-node/lunarbase-pmm-math-node/` | `lunarbase-pmm-math-node` (cdylib) | N-API binding for Node.js. Native, OS+arch specific. |
-| `math/go/` | `lunarbasepmm` | Pure Go mirror of the Rust public API. |
-| `examples/minimal/{rust,typescript,go}/` | — | Minimal end-to-end usage samples. See [examples/minimal/README.md](examples/minimal/README.md). |
+| Path                                      | Crate / module                     | Purpose                                                                                         |
+| ----------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `math/rust/lunarbase-pmm-math/`           | `lunarbase-pmm-math` (rlib)        | Pure Rust core. Portable, no `unsafe`, no FFI.                                                  |
+| `math/rust-node/lunarbase-pmm-math-node/` | `lunarbase-pmm-math-node` (cdylib) | N-API binding for Node.js. Native, OS+arch specific.                                            |
+| `math/go/`                                | `lunarbasepmm`                     | Pure Go mirror of the Rust public API.                                                          |
+| `examples/minimal/{rust,typescript,go}/`  | —                                  | Minimal end-to-end usage samples. See [examples/minimal/README.md](examples/minimal/README.md). |
 
 The Rust core and the Go mirror are validated against the same JSONL test
 vectors generated from the on-chain reference (`deterministic_vectors.jsonl`,
@@ -40,7 +40,7 @@ Names follow each language's conventions (`QuoteXToY` in Go,
 
 - Rust 1.75+ (stable) with `cargo`
 - Go 1.22+
-- For cross-compilation: `zig` and `cargo-zigbuild` (see *Cross-compilation*)
+- For cross-compilation: `zig` and `cargo-zigbuild` (see _Cross-compilation_)
 - For the Node.js binding: Node.js 18+ to load the produced `.node` file
 
 Install all cross-compilation tooling in one command:
@@ -122,11 +122,11 @@ make go-cross-all
 
 ## Platform notes
 
-| Package | OS-/arch-dependent? | Notes |
-| --- | --- | --- |
-| `rust/lunarbase-pmm-math` | No | Pure Rust on `ruint`. Identical artifact across platforms. |
-| `go/` | No | Pure Go on `holiman/uint256`. CGO not used. |
-| `rust-node/...` | **Yes** | Produces `.so`/`.dylib` per (os, arch). Standard for Node native addons. |
+| Package                   | OS-/arch-dependent? | Notes                                                                    |
+| ------------------------- | ------------------- | ------------------------------------------------------------------------ |
+| `rust/lunarbase-pmm-math` | No                  | Pure Rust on `ruint`. Identical artifact across platforms.               |
+| `go/`                     | No                  | Pure Go on `holiman/uint256`. CGO not used.                              |
+| `rust-node/...`           | **Yes**             | Produces `.so`/`.dylib` per (os, arch). Standard for Node native addons. |
 
 ## Test vectors
 

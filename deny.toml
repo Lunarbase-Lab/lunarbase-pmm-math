@@ -1,0 +1,6 @@
+# cargo-deny configuration. We only run `check advisories` from CI.
+# See https://embarkstudios.github.io/cargo-deny/ for full schema.
+
+[advisories]
+yanked = "warn"
+ignore = []

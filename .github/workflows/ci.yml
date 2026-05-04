@@ -48,7 +48,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     defaults:
       run:
-        working-directory: go
+        working-directory: math/go
     steps:
       - uses: actions/checkout@v4
 
@@ -56,7 +56,7 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
-          cache-dependency-path: go/go.sum
+          cache-dependency-path: math/go/go.sum
 
       - name: gofmt
         run: |
@@ -74,7 +74,7 @@ jobs:
         uses: dominikh/staticcheck-action@v1
         with:
           version: latest
-          working-directory: go
+          working-directory: math/go
           install-go: false
 
       - name: test (with race detector)
@@ -143,10 +143,13 @@ jobs:
           go run .
 
   audit:
-    name: cargo-audit
+    name: Security advisories (cargo-deny)
     runs-on: ubuntu-latest
+    # Advisories are informational and shouldn't block merges; the job still
+    # shows red on the PR if a vulnerable dep is in Cargo.lock.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - uses: rustsec/audit-check@v2.0.0
+      - uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          command: check advisories
