@@ -8,6 +8,7 @@ use crate::uint256::{U256Ext, U256};
 const Q48: U256 = U256::Q48;
 
 /// `getNextSqrtPriceFromAmountXRoundingUp` (addX=true), used by `quoteXToY`.
+#[inline]
 pub fn get_next_sqrt_price_from_amount_x_rounding_up(
     sqrt_px48: u128,
     liquidity: u128,
@@ -43,6 +44,7 @@ pub fn get_next_sqrt_price_from_amount_x_rounding_up(
 }
 
 /// `getNextSqrtPriceFromAmountYRoundingDown` (addY=true), used by `quoteYToX`.
+#[inline]
 pub fn get_next_sqrt_price_from_amount_y_rounding_down(
     sqrt_px48: u128,
     liquidity: u128,
@@ -61,6 +63,7 @@ pub fn get_next_sqrt_price_from_amount_y_rounding_down(
 }
 
 /// |Δx| between two sqrt prices for a given liquidity. Quoting uses `roundUp=false`.
+#[inline]
 pub fn get_amount_x_delta(
     sqrt_ratio_a: u128,
     sqrt_ratio_b: u128,
@@ -89,6 +92,7 @@ pub fn get_amount_x_delta(
 }
 
 /// |Δy| between two sqrt prices for a given liquidity. Quoting uses `roundUp=false`.
+#[inline]
 pub fn get_amount_y_delta(
     sqrt_ratio_a: u128,
     sqrt_ratio_b: u128,

@@ -9,6 +9,15 @@ use crate::uint256::{U256Ext, U256};
 const Q48: u128 = 1u128 << 48;
 const Q24: u128 = 1u128 << 24;
 
+// Q48 / Q96 as `U256` constants. Pre-computed at compile time so `concentration_q48`
+// doesn't pay for `from_u128` + `wrapping_mul` on every quote.
+const Q48_U256: U256 = U256::Q48;
+const Q96_U256: U256 = {
+    let mut limbs = [0u64; 4];
+    limbs[1] = 1u64 << 32; // 2^96 = (2^64) * 2^32 → goes into the second limb
+    U256::from_limbs(limbs)
+};
+
 /// Snapshot of pool state required to compute a quote.
 ///
 /// All fixed-point values use Q48. `sqrt_price_x48` and
@@ -56,39 +65,39 @@ fn concentration_q48(
         return c;
     }
 
-    let q48 = U256::from_u128(Q48);
-    let q96 = U256::from_u128(Q48).wrapping_mul(U256::from_u128(Q48));
-    let price_q96 = U256::from_u128(sqrt_price_x48).wrapping_mul(U256::from_u128(sqrt_price_x48));
-    let x_wealth_in_y = U256::mul_div(U256::from_u128(reserve_x), price_q96, q96);
+    let sqrt_price = U256::from_u128(sqrt_price_x48);
+    let price_q96 = sqrt_price.wrapping_mul(sqrt_price);
+    let x_wealth_in_y = U256::mul_div(U256::from_u128(reserve_x), price_q96, Q96_U256);
     let total_wealth_in_y = x_wealth_in_y.wrapping_add(U256::from_u128(reserve_y));
     if total_wealth_in_y.is_zero() {
         return c;
     }
 
     let amount_in_wealth = if x_to_y {
-        U256::mul_div(amount_in, price_q96, q96)
+        U256::mul_div(amount_in, price_q96, Q96_U256)
     } else {
         amount_in
     };
 
     // r in Q48: min(amountInWealth/totalWealth, 1) * Q48
     let r_q48 = if amount_in_wealth >= total_wealth_in_y {
-        q48
+        Q48_U256
     } else {
-        U256::mul_div(amount_in_wealth, q48, total_wealth_in_y)
+        U256::mul_div(amount_in_wealth, Q48_U256, total_wealth_in_y)
     };
 
     // r^2 in Q48
-    let r_squared_q48 = U256::mul_div(r_q48, r_q48, q48);
+    let r_squared_q48 = U256::mul_div(r_q48, r_q48, Q48_U256);
 
     // multiplier = Q48 + k * r^2
-    let multiplier_q48 = q48.wrapping_add(U256::from_u128(k as u128).wrapping_mul(r_squared_q48));
+    let multiplier_q48 =
+        Q48_U256.wrapping_add(U256::from_u128(k as u128).wrapping_mul(r_squared_q48));
 
     // C = fee * multiplier / Q48
-    let result = U256::mul_div(c, multiplier_q48, q48);
+    let result = U256::mul_div(c, multiplier_q48, Q48_U256);
 
-    if result >= q48 {
-        q48
+    if result >= Q48_U256 {
+        Q48_U256
     } else {
         result
     }
@@ -121,7 +130,7 @@ fn upper_bound(sqrt_price_x48: u128, concentration_q48: u64) -> u128 {
 fn ly(sqrt_price_x48: u128, p_bid: u128, reserve_y: u128) -> u128 {
     U256::mul_div(
         U256::from_u128(reserve_y),
-        U256::from_u128(Q48),
+        Q48_U256,
         U256::from_u128(sqrt_price_x48 - p_bid),
     )
     .as_u128()
@@ -131,7 +140,7 @@ fn lx(sqrt_price_x48: u128, p_ask: u128, reserve_x: u128) -> u128 {
     U256::mul_div(
         U256::from_u128(reserve_x),
         U256::from_u128(sqrt_price_x48).wrapping_mul(U256::from_u128(p_ask)),
-        U256::from_u128(Q48).wrapping_mul(U256::from_u128(p_ask - sqrt_price_x48)),
+        Q48_U256.wrapping_mul(U256::from_u128(p_ask - sqrt_price_x48)),
     )
     .as_u128()
 }
@@ -157,7 +166,7 @@ pub fn quote_x_to_y(params: &PoolParams, dx: U256) -> QuoteResult {
         true,
     );
 
-    if c_q48 >= U256::from_u128(Q48) {
+    if c_q48 >= Q48_U256 {
         return zero;
     }
 
@@ -183,11 +192,7 @@ pub fn quote_x_to_y(params: &PoolParams, dx: U256) -> QuoteResult {
     let dy = get_amount_y_delta(params.sqrt_price_x48, p_next, liquidity, false);
 
     // fee = dy * feeQ48 / Q48
-    let fee = U256::mul_div(
-        dy,
-        U256::from_u128(params.fee_q48 as u128),
-        U256::from_u128(Q48),
-    );
+    let fee = U256::mul_div(dy, U256::from_u128(params.fee_q48 as u128), Q48_U256);
     let dy_after_fee = dy - fee;
 
     QuoteResult {
@@ -218,7 +223,7 @@ pub fn quote_y_to_x(params: &PoolParams, dy: U256) -> QuoteResult {
         false,
     );
 
-    if c_q48 >= U256::from_u128(Q48) {
+    if c_q48 >= Q48_U256 {
         return zero;
     }
 
@@ -244,11 +249,7 @@ pub fn quote_y_to_x(params: &PoolParams, dy: U256) -> QuoteResult {
     let dx = get_amount_x_delta(params.sqrt_price_x48, p_next, liquidity, false);
 
     // fee = dx * feeQ48 / Q48
-    let fee = U256::mul_div(
-        dx,
-        U256::from_u128(params.fee_q48 as u128),
-        U256::from_u128(Q48),
-    );
+    let fee = U256::mul_div(dx, U256::from_u128(params.fee_q48 as u128), Q48_U256);
     let dx_after_fee = dx - fee;
 
     QuoteResult {

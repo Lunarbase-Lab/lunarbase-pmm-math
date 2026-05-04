@@ -41,16 +41,17 @@ ALL_RUST_CROSS_TARGETS := \
 
 .PHONY: all ci setup-cross check-zig \
         rust-build rust-test rust-fmt rust-fmt-check rust-clippy rust-clean \
-        rust-build-release rust-cross \
+        rust-build-release rust-cross rust-bench \
         node-build node-test node-clean node-cross \
         node-cross-linux-x64 node-cross-linux-arm64 node-cross-linux-musl \
         node-cross-mac-x64 node-cross-mac-arm64 node-cross-mac-universal \
         node-cross-all \
         go-build go-test go-vet go-fmt go-fmt-check go-tidy go-clean \
+        go-bench go-staticcheck \
         go-cross-linux-amd64 go-cross-linux-arm64 \
         go-cross-darwin-amd64 go-cross-darwin-arm64 \
         go-cross-windows-amd64 go-cross-all \
-        build test clean fmt fmt-check lint
+        build test clean fmt fmt-check lint bench bench-rust bench-go
 
 # ---------- top-level ----------
 all: build test
@@ -166,6 +167,15 @@ go-tidy:
 
 go-clean:
 	cd $(GO_DIR) && $(GO) clean -testcache
+
+# ---------- benchmarks ----------
+bench: bench-rust bench-go
+
+bench-rust:
+	$(CARGO) bench -p lunarbase-pmm-math
+
+bench-go:
+	cd $(GO_DIR) && $(GO) test -bench=. -benchmem -run=^$$ -count=3 ./...
 
 # Go cross-compilation: pure Go, no CGO, works on any host.
 go-cross-linux-amd64:

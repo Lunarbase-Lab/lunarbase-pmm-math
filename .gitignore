@@ -1,6 +1,10 @@
 target/
 .claude/
 
+# Local bench output (kept out of git; final numbers go to BENCHMARKS.md)
+.bench-baseline.txt
+.bench-*.txt
+
 # Go build artifacts
 go/bin/
 *.test

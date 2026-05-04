@@ -94,6 +94,7 @@ impl U256Ext for U256 {
     }
 
     /// Solidity-style mulDiv: floor((a * b) / denominator) with 512-bit intermediate.
+    #[inline]
     fn mul_div(a: U256, b: U256, denominator: U256) -> U256 {
         assert!(!denominator.is_zero(), "mulDiv: division by zero");
         let product: U512 = a.widening_mul(b);
@@ -108,6 +109,7 @@ impl U256Ext for U256 {
     }
 
     /// mulDiv with rounding up.
+    #[inline]
     fn mul_div_ceil(a: U256, b: U256, denominator: U256) -> U256 {
         assert!(!denominator.is_zero(), "mulDiv: division by zero");
         let product: U512 = a.widening_mul(b);
@@ -127,6 +129,7 @@ impl U256Ext for U256 {
     }
 
     /// ceil(a / b)
+    #[inline]
     fn ceil_div(a: U256, b: U256) -> U256 {
         a.div_ceil(b)
     }

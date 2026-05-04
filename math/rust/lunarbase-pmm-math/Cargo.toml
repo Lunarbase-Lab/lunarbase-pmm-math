@@ -16,5 +16,12 @@ crate-type = ["rlib"]
 [dependencies]
 ruint = { workspace = true }
 
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "quote"
+harness = false
+
 [lints]
 workspace = true

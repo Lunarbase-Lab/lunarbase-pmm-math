@@ -20,21 +20,24 @@ func TestIsqrt(t *testing.T) {
 		{0, 0}, {1, 1}, {4, 2}, {9, 3}, {10, 3}, {100, 10},
 	}
 	for _, tc := range cases {
-		got := isqrt(uint256.NewInt(tc.in))
-		assert.Equal(t, uint256.NewInt(tc.expected), got, "isqrt(%d)", tc.in)
+		var got uint256.Int
+		isqrt(&got, uint256.NewInt(tc.in))
+		assert.Equal(t, uint256.NewInt(tc.expected), &got, "isqrt(%d)", tc.in)
 	}
 }
 
 func TestConcentrationQ48_ZeroFee(t *testing.T) {
-	c := concentrationQ48(uint256.NewInt(1<<48), 0, uint256.NewInt(1000),
+	var c uint256.Int
+	concentrationQ48(&c, uint256.NewInt(1<<48), 0, uint256.NewInt(1000),
 		uint256.NewInt(10000), uint256.NewInt(10000), 5000, true)
 	assert.True(t, c.IsZero())
 }
 
 func TestConcentrationQ48_ZeroAmount(t *testing.T) {
-	c := concentrationQ48(uint256.NewInt(1<<48), 1000, new(uint256.Int),
+	var c uint256.Int
+	concentrationQ48(&c, uint256.NewInt(1<<48), 1000, new(uint256.Int),
 		uint256.NewInt(10000), uint256.NewInt(10000), 5000, true)
-	assert.Equal(t, uint256.NewInt(1000), c)
+	assert.Equal(t, uint256.NewInt(1000), &c)
 }
 
 func TestQuoteReturnsZeroWhenNoLiquidity(t *testing.T) {
@@ -52,7 +55,11 @@ func TestQuoteReturnsZeroWhenNoLiquidity(t *testing.T) {
 }
 
 func TestMulDivCeil(t *testing.T) {
-	assert.Equal(t, uint256.NewInt(1), mulDivUp(uint256.NewInt(1), uint256.NewInt(1), uint256.NewInt(2)))
-	assert.Equal(t, uint256.NewInt(2), mulDivUp(uint256.NewInt(3), uint256.NewInt(3), uint256.NewInt(5)))
-	assert.Equal(t, uint256.NewInt(2), mulDivUp(uint256.NewInt(2), uint256.NewInt(2), uint256.NewInt(2)))
+	mu := func(x, y, d uint64) *uint256.Int {
+		var dst uint256.Int
+		return mulDivUp(&dst, uint256.NewInt(x), uint256.NewInt(y), uint256.NewInt(d))
+	}
+	assert.Equal(t, uint256.NewInt(1), mu(1, 1, 2))
+	assert.Equal(t, uint256.NewInt(2), mu(3, 3, 5))
+	assert.Equal(t, uint256.NewInt(2), mu(2, 2, 2))
 }

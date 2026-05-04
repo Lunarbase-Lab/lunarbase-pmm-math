@@ -70,6 +70,21 @@ Per-package targets are also available: `rust-build`, `rust-test`,
 `node-build`, `node-test`, `go-build`, `go-test`, etc. Run `make -n <target>`
 to inspect the underlying command.
 
+## Benchmarks
+
+Micro-benchmarks for the quoting hot path live in
+`math/rust/lunarbase-pmm-math/benches/quote.rs` (criterion) and
+`math/go/quote_bench_test.go` (`testing.B`). Numbers and methodology are in
+[BENCHMARKS.md](BENCHMARKS.md).
+
+```sh
+make bench          # both
+make bench-rust     # criterion
+make bench-go       # testing.B with -benchmem
+```
+
+Bench jobs are not run in CI — they are too noise-sensitive on shared runners.
+
 ## Cross-compilation
 
 Cross-compilation uses [`cargo-zigbuild`][zigbuild], which links through
