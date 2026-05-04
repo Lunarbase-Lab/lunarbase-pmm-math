@@ -1,0 +1,8 @@
+# musl by default links libc statically, which prevents producing a `cdylib`
+# (the napi addon). Disabling crt-static restores dynamic linking, matching
+# how Node.js binaries on Alpine are built and how napi-rs ships musl addons.
+[target.x86_64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=-crt-static"]
+
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=-crt-static"]
