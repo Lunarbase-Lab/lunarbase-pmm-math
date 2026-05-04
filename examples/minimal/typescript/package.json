@@ -1,0 +1,19 @@
+{
+  "name": "example-typescript",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:addon": "npm --prefix ../../../math/rust-node/lunarbase-pmm-math-node install --no-save && npm --prefix ../../../math/rust-node/lunarbase-pmm-math-node run build",
+    "prerun": "npm run build:addon",
+    "run": "tsx index.ts"
+  },
+  "dependencies": {
+    "lunarbase-pmm-math-node": "file:../../../math/rust-node/lunarbase-pmm-math-node"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0",
+    "@types/node": "^20.0.0"
+  }
+}

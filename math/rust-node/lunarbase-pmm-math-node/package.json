@@ -1,0 +1,42 @@
+{
+  "name": "lunarbase-pmm-math-node",
+  "version": "0.1.0",
+  "description": "N-API binding exposing lunarbase-pmm-math to Node.js.",
+  "license": "MIT OR Apache-2.0",
+  "private": true,
+  "type": "module",
+  "main": "wrapper.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./wrapper.js",
+      "require": "./index.cjs",
+      "types": "./index.d.ts"
+    }
+  },
+  "files": [
+    "wrapper.js",
+    "index.cjs",
+    "index.d.ts",
+    "lunarbase-pmm-math-node.*.node"
+  ],
+  "napi": {
+    "name": "lunarbase-pmm-math-node",
+    "triples": {
+      "defaults": true
+    }
+  },
+  "scripts": {
+    "build": "CARGO_TARGET_DIR=target napi build --platform --release && mv -f index.js index.cjs",
+    "build:debug": "CARGO_TARGET_DIR=target napi build --platform && mv -f index.js index.cjs",
+    "artifacts": "napi artifacts",
+    "test": "node --test test/quote.test.mjs",
+    "prepublishOnly": "napi prepublish -t npm"
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "^2.18.4"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

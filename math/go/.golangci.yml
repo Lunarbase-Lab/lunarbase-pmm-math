@@ -1,0 +1,40 @@
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gocritic
+    - gofmt
+    - gofumpt
+    - goimports
+    - misspell
+    - revive
+    - unconvert
+
+  settings:
+    govet:
+      enable-all: true
+    revive:
+      rules:
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+        - name: var-naming
+        - name: package-comments
+        - name: unused-parameter
+        - name: indent-error-flow
+        - name: error-return
+        - name: error-naming
+        - name: receiver-naming
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

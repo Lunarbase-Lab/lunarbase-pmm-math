@@ -1,0 +1,43 @@
+[workspace]
+members = [
+    "math/rust/lunarbase-pmm-math",
+    "math/rust-node/lunarbase-pmm-math-node",
+]
+exclude = ["examples"]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/lunarbase/lunarbase-pmm-math"
+rust-version = "1.77"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# Targeted lints from pedantic/perf/correctness that are high-signal
+# without forcing a churn pass over the existing codebase.
+explicit_iter_loop = "warn"
+needless_pass_by_value = "warn"
+redundant_closure_for_method_calls = "warn"
+inefficient_to_string = "warn"
+str_to_string = "warn"
+unnecessary_wraps = "warn"
+
+[workspace.dependencies]
+ruint = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+smallvec = { version = "1", features = ["serde"] }
+thiserror = "2"
+
+[profile.release]
+lto = true
+opt-level = 3
+codegen-units = 1
+strip = true

@@ -1,0 +1,9 @@
+[package]
+name = "example-rust"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+lunarbase-pmm-math = { path = "../../../math/rust/lunarbase-pmm-math" }
+ruint = "1"

@@ -1,0 +1,24 @@
+[package]
+name = "lunarbase-pmm-math-node"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "N-API binding exposing lunarbase-pmm-math to Node.js."
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+lunarbase-pmm-math = { path = "../../rust/lunarbase-pmm-math" }
+napi = { version = "2", features = ["napi4"] }
+napi-derive = "2"
+ruint = { workspace = true }
+
+[build-dependencies]
+napi-build = "2"
+
+[lints]
+workspace = true
