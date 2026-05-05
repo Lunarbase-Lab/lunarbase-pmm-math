@@ -7,8 +7,8 @@ use tracing::{debug, info, warn};
 
 use crate::abi::Pool;
 use crate::cache::Cache;
-use crate::ws::ChainEvent;
 use crate::ws::types::LogEvent;
+use crate::ws::ChainEvent;
 
 pub async fn dispatch(event: ChainEvent, cache: &mut Cache) -> Result<()> {
     match event {
@@ -111,4 +111,3 @@ fn log_fingerprint(log: &LogEvent) -> String {
     let digest = keccak256(&payload);
     format!("{:x}:{:x}", block, digest)
 }
-

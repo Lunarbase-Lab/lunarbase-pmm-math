@@ -27,7 +27,9 @@ pub async fn apply(ev: &Pool::SwapExecuted, snap: &PoolState, cache: &mut Cache)
     };
 
     let (new_x, new_y) = if ev.xToY {
-        let x = snap.reserve_x.saturating_add(u256_to_u128_saturating(gross_x_in));
+        let x = snap
+            .reserve_x
+            .saturating_add(u256_to_u128_saturating(gross_x_in));
         let y = snap
             .reserve_y
             .saturating_sub(u256_to_u128_saturating(gross_y_in));
@@ -36,7 +38,9 @@ pub async fn apply(ev: &Pool::SwapExecuted, snap: &PoolState, cache: &mut Cache)
         let x = snap
             .reserve_x
             .saturating_sub(u256_to_u128_saturating(gross_x_in));
-        let y = snap.reserve_y.saturating_add(u256_to_u128_saturating(gross_y_in));
+        let y = snap
+            .reserve_y
+            .saturating_add(u256_to_u128_saturating(gross_y_in));
         (x, y)
     };
 

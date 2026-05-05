@@ -19,11 +19,7 @@ const PING_INTERVAL: Duration = Duration::from_secs(15);
 const RECONNECT_BACKOFF_MIN: Duration = Duration::from_millis(500);
 const RECONNECT_BACKOFF_MAX: Duration = Duration::from_secs(15);
 
-pub async fn run(
-    ws_url: String,
-    pool: Address,
-    sender: mpsc::Sender<ChainEvent>,
-) -> Result<()> {
+pub async fn run(ws_url: String, pool: Address, sender: mpsc::Sender<ChainEvent>) -> Result<()> {
     let mut backoff = RECONNECT_BACKOFF_MIN;
     loop {
         match connect_loop(&ws_url, pool, &sender).await {
@@ -111,7 +107,9 @@ async fn handle_text(text: &str, sender: &mpsc::Sender<ChainEvent>) -> Result<()
         return Ok(());
     }
 
-    let Some(params) = v.get("params") else { return Ok(()) };
+    let Some(params) = v.get("params") else {
+        return Ok(());
+    };
     let result = params.get("result").cloned().unwrap_or(Value::Null);
     let sub_id = params
         .get("subscription")

@@ -3,4 +3,9 @@
 
 [advisories]
 yanked = "warn"
-ignore = []
+ignore = [
+    # `paste` is unmaintained, pulled in transitively by alloy-sol-macro /
+    # alloy-sol-types (used only by the offchain-quoting example crates,
+    # not by the published math crates).
+    "RUSTSEC-2024-0436",
+]

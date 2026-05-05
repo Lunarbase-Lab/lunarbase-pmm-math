@@ -3,9 +3,7 @@ use eyre::{Context, Result};
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 
-use crate::pool_state::{
-    parse_decimal_u128, PoolState, ReservesPayload, UpdatesPayload,
-};
+use crate::pool_state::{parse_decimal_u128, PoolState, ReservesPayload, UpdatesPayload};
 
 const RESERVES_TTL: u64 = 10;
 const UPD_TTL: u64 = 6;
@@ -69,8 +67,7 @@ impl Cache {
     }
 
     pub async fn set_reserves(&mut self, x: u128, y: u128) -> Result<()> {
-        let payload =
-            serde_json::to_string(&ReservesPayload::from_pair(x, y))?;
+        let payload = serde_json::to_string(&ReservesPayload::from_pair(x, y))?;
         let _: () = self
             .conn
             .set_ex(self.k_reserves(), payload, RESERVES_TTL)
@@ -78,21 +75,13 @@ impl Cache {
         Ok(())
     }
 
-    pub async fn set_state(
-        &mut self,
-        block: u64,
-        anchor_px48: u128,
-        fee_q48: u64,
-    ) -> Result<()> {
+    pub async fn set_state(&mut self, block: u64, anchor_px48: u128, fee_q48: u64) -> Result<()> {
         let payload = serde_json::to_string(&UpdatesPayload {
             block,
             anchor_px48: anchor_px48.to_string(),
             fee: fee_q48.to_string(),
         })?;
-        let _: () = self
-            .conn
-            .set_ex(self.k_updates(), payload, UPD_TTL)
-            .await?;
+        let _: () = self.conn.set_ex(self.k_updates(), payload, UPD_TTL).await?;
         Ok(())
     }
 
@@ -192,9 +181,7 @@ impl Cache {
         let concentration_k = concentration_k
             .and_then(|s| s.parse::<u32>().ok())
             .unwrap_or(0);
-        let block_delay = block_delay
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0);
+        let block_delay = block_delay.and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
         let paused = paused.is_some_and(|s| s == "1");
 
         Ok(Some(PoolState {

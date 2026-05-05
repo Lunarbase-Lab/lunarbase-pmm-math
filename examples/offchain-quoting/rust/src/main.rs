@@ -81,8 +81,7 @@ async fn monitor_channel(tx: mpsc::Sender<ws::ChainEvent>) {
         if used >= CHANNEL_BACKPRESSURE_THRESHOLD {
             warn!(
                 used,
-                cap,
-                "event channel high watermark; consumer may be lagging"
+                cap, "event channel high watermark; consumer may be lagging"
             );
         }
     }
