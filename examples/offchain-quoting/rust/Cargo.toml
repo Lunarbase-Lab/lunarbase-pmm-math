@@ -1,0 +1,58 @@
+[package]
+name = "offchain-quoting-example-rust"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+lunarbase-pmm-math = { path = "../../../math/rust/lunarbase-pmm-math" }
+
+# Async runtime
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "signal", "net"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots", "url"] }
+futures-util = "0.3"
+
+# Ethereum primitives + ABI codec + JSON-RPC + provider
+alloy = { version = "0.8", default-features = false, features = [
+    "std",
+    "sol-types",
+    "rpc-types-eth",
+    "providers",
+    "provider-http",
+    "transport-http",
+    "reqwest",
+    "reqwest-rustls-tls",
+    "rlp",
+    "contract",
+    "network",
+    "consensus",
+    "json-abi",
+    "dyn-abi",
+] }
+
+# Big-int helpers (matches what lunarbase-pmm-math re-exports)
+ruint = { workspace = true }
+
+# Redis client
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "aio", "connection-manager", "script"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = "1"
+
+# Error reporting
+eyre = "0.6"
+thiserror = { workspace = true }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "chrono"] }
+
+# Config
+dotenvy = "0.15"
+
+[lints]
+workspace = true

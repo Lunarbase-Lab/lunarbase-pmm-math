@@ -2,8 +2,10 @@
 members = [
     "math/rust/lunarbase-pmm-math",
     "math/rust-node/lunarbase-pmm-math-node",
+    "examples/offchain-quoting/rust",
+    "examples/offchain-quoting/rust-legacy",
 ]
-exclude = ["examples"]
+exclude = ["examples/minimal"]
 resolver = "2"
 
 [workspace.package]
