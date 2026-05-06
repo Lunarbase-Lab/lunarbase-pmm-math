@@ -105,5 +105,5 @@ fn redact_redis(url: &str) -> String {
             }
         }
     }
-    url.to_string()
+    url.to_owned()
 }

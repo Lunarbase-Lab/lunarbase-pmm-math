@@ -58,8 +58,8 @@ async fn handle_log(log: LogEvent, cache: &mut Cache) -> Result<()> {
         );
     } else if topic0 == sig::<Pool::Sync>() {
         let ev = decode::<Pool::Sync>(&log)?;
-        let x: u128 = ev.reserveX.into();
-        let y: u128 = ev.reserveY.into();
+        let x: u128 = ev.reserveX;
+        let y: u128 = ev.reserveY;
         cache.set_reserves(x, y).await?;
         info!(block, reserve_x = x, reserve_y = y, "Sync");
     } else if topic0 == sig::<Pool::SwapExecuted>() {
@@ -96,7 +96,7 @@ fn sig<E: SolEvent>() -> B256 {
 }
 
 fn decode<E: SolEvent>(log: &LogEvent) -> Result<E> {
-    let topics = log.topics.iter().copied().collect::<Vec<_>>();
+    let topics = log.topics.to_vec();
     Ok(E::decode_raw_log(topics, &log.data, true)?)
 }
 
