@@ -8,7 +8,7 @@ import (
 
 	"github.com/holiman/uint256"
 
-	pmm "github.com/lunarbase/lunarbase-pmm-math/math/go"
+	pmm "github.com/Lunarbase-Lab/lunarbase-pmm-math/math/go"
 )
 
 func main() {
@@ -16,10 +16,11 @@ func main() {
 	params := &pmm.PoolParams{
 		SqrtPriceX48:       p,
 		AnchorSqrtPriceX48: p,
-		FeeQ48:             1 << 44,
+		FeeAskX24:          (1 << 24) / 1_000, // 0.10%
+		FeeBidX24:          (1 << 24) / 1_000, // 0.10%
 		ReserveX:           uint256.NewInt(1_000_000_000),
 		ReserveY:           uint256.NewInt(1_000_000_000),
-		ConcentrationK:     5_000,
+		ConcentrationKQ12:  5_000 << 12, // legacy K=5000 in Q20.12 encoding
 	}
 
 	dx := uint256.NewInt(10_000)

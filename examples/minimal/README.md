@@ -29,7 +29,7 @@ go run ./examples/minimal/go
 
 `examples/minimal/go/go.mod` uses a `replace` directive to consume the local
 package in `math/go`. To depend on a published version instead, drop the
-`replace` line and pin `github.com/lunarbase/lunarbase-pmm-math/math/go` to a
+`replace` line and pin `github.com/Lunarbase-Lab/lunarbase-pmm-math/math/go` to a
 tagged version in the `require` block.
 
 ## TypeScript / Node.js

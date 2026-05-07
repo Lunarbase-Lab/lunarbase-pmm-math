@@ -85,7 +85,7 @@ packages share the upstream test vectors and are guaranteed bit-identical.
 
 ## Building from source
 
-See the [maintainer notes](https://github.com/lunarbase/lunarbase-pmm-math/tree/main/math/rust-node/lunarbase-pmm-math-node)
+See the [maintainer notes](https://github.com/Lunarbase-Lab/lunarbase-pmm-math/tree/main/math/rust-node/lunarbase-pmm-math-node)
 in the source repository for cross-compilation, musl/Alpine notes, and
 release process.
 

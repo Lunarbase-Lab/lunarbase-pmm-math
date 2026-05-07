@@ -21,12 +21,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/lunarbase/lunarbase-pmm-math.git",
+    "url": "git+https://github.com/Lunarbase-Lab/lunarbase-pmm-math.git",
     "directory": "math/rust-node/lunarbase-pmm-math-node"
   },
-  "homepage": "https://github.com/lunarbase/lunarbase-pmm-math#readme",
+  "homepage": "https://github.com/Lunarbase-Lab/lunarbase-pmm-math#readme",
   "bugs": {
-    "url": "https://github.com/lunarbase/lunarbase-pmm-math/issues"
+    "url": "https://github.com/Lunarbase-Lab/lunarbase-pmm-math/issues"
   },
   "keywords": [
     "lunarbase",

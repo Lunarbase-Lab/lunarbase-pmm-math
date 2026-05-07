@@ -1,6 +1,6 @@
 # lunarbase-pmm-math
 
-[![CI](https://github.com/lunarbase/lunarbase-pmm-math/actions/workflows/ci.yml/badge.svg)](https://github.com/lunarbase/lunarbase-pmm-math/actions/workflows/ci.yml)
+[![CI](https://github.com/Lunarbase-Lab/lunarbase-pmm-math/actions/workflows/ci.yml/badge.svg)](https://github.com/Lunarbase-Lab/lunarbase-pmm-math/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
 Reference implementations of the LunarBase Curve PMM quoting math, kept
