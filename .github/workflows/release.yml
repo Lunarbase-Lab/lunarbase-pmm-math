@@ -89,9 +89,11 @@ jobs:
         run: mv -f index.js index.cjs
 
       - name: Upload .node + js metadata
+        # `napi artifacts` looks for files at `artifacts/bindings-<triple>/`;
+        # the artifact name MUST be exactly `bindings-${triple}` (full Rust
+        # triple, not napi short form) for the move step to find them.
         # index.cjs/index.d.ts are identical across targets (auto-generated
-        # platform-detection code + TS types). Upload them from every job;
-        # `merge-multiple` will deduplicate on download.
+        # platform-detection code + TS types) and ride along for free.
         uses: actions/upload-artifact@v4
         with:
           name: bindings-${{ matrix.target }}
@@ -123,38 +125,43 @@ jobs:
       - name: Install npm deps
         run: npm install --ignore-scripts
 
-      - name: Download all .node artifacts
+      - name: Download all artifacts (per-name subdirs preserved)
+        # IMPORTANT: do NOT pass `merge-multiple: true`. `napi artifacts`
+        # walks `artifacts/bindings-<full-triple>/` per the napi-rs convention;
+        # flattening the layout breaks the move step.
         uses: actions/download-artifact@v4
         with:
           path: math/rust-node/lunarbase-pmm-math-node/artifacts
           pattern: bindings-*
-          merge-multiple: true
 
       - name: Restore js metadata to package root
-        # `napi artifacts` only moves *.node files into npm/<triple>/; the
-        # auto-generated index.cjs/index.d.ts (uploaded alongside) stay in
-        # artifacts/ and must be put back at the package root so the main
-        # package tarball contains them.
+        # index.cjs/index.d.ts ride inside every per-platform artifact and
+        # are byte-identical (auto-generated platform-loader + TS types).
+        # Pull them from any one artifact directory.
         run: |
-          cp artifacts/index.cjs index.cjs
-          cp artifacts/index.d.ts index.d.ts
+          cp artifacts/bindings-x86_64-unknown-linux-gnu/index.cjs index.cjs
+          cp artifacts/bindings-x86_64-unknown-linux-gnu/index.d.ts index.d.ts
 
-      - name: Reorganise artifacts into per-platform dirs
+      - name: Move .node files into npm/<short-triple>/
         run: npx napi artifacts
 
-      - name: Generate per-platform npm sub-packages and publish them
-        # `napi prepublish` writes per-triple package.json files into
-        # npm/<triple>/, then runs `npm publish` from each. --skip-gh-release
-        # disables the GitHub Releases asset upload (we don't use it).
-        run: npx napi prepublish -t npm --skip-gh-release
+      - name: Show final layout (debug aid)
+        run: |
+          echo "=== package root ==="
+          ls -la
+          echo "=== npm/ ==="
+          ls -R npm/ || true
+
+      - name: Publish to npm
+        # `npm publish` triggers `prepublishOnly` (= `napi prepublish -t npm
+        # --skip-gh-release`), which generates per-triple package.json files,
+        # publishes each sub-package via `npm publish` from its dir, and
+        # rewrites the main package's `optionalDependencies`. After the
+        # script returns, the outer `npm publish` finishes by uploading the
+        # main package. One step does it all.
+        run: |
+          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
+          npm publish --access public
         env:
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish main package
-        # --ignore-scripts skips `prepublishOnly` (which would re-run
-        # `napi prepublish` and try to re-publish the sub-packages, causing
-        # "version already published" errors).
-        run: npm publish --access public --ignore-scripts
-        env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
