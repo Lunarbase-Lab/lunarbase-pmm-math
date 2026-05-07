@@ -160,13 +160,17 @@ jobs:
           cp artifacts/bindings-x86_64-unknown-linux-gnu/index.cjs index.cjs
           cp artifacts/bindings-x86_64-unknown-linux-gnu/index.d.ts index.d.ts
 
+      - name: Generate per-triple npm/<abi>/ skeleton (package.json + README)
+        # `napi prepublish` reads npm/<abi>/package.json to know what to ship
+        # per platform; it does NOT create those files itself. This step
+        # writes them based on `napi.triples` in the main package.json.
+        run: npx napi create-npm-dirs
+
       - name: Move .node files into npm/<short-abi>/
         # We do this manually instead of `napx napi artifacts` because the
-        # latter has been flaky on this layout (errors with ENOENT trying to
-        # open the destination after a silent source mismatch). One-line
-        # `mv` per platform is explicit and easy to debug.
+        # latter errors with ENOENT on this layout. One-line `mv` per
+        # platform is explicit and easy to debug.
         run: |
-          mkdir -p npm/darwin-arm64 npm/linux-x64-gnu
           mv artifacts/bindings-aarch64-apple-darwin/lunarbase-pmm-math.darwin-arm64.node npm/darwin-arm64/
           mv artifacts/bindings-x86_64-unknown-linux-gnu/lunarbase-pmm-math.linux-x64-gnu.node npm/linux-x64-gnu/
 
