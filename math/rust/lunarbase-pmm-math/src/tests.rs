@@ -12,10 +12,14 @@ mod cross_validation {
         name: String,
         dir: String,
         p_x48: u128,
-        fee: u64,
+        /// Directional fee (Q24): `feeBidX24` for `xToY` rows, `feeAskX24`
+        /// for `yToX` rows. The non-quoted side's fee is irrelevant for the
+        /// quote and arbitrarily set to zero by the parser.
+        fee_x24: u32,
         res_x: u128,
         res_y: u128,
-        k: u32,
+        /// Concentration K stored as Q20.12.
+        k_q12: u32,
         amount_in: u128,
         amount_out: u128,
         p_next: u128,
@@ -47,10 +51,10 @@ mod cross_validation {
         let dir = extract_field(line, "dir").to_string();
         let name = extract_field(line, "name").to_string();
         let p_x48 = parse_u128(extract_field(line, "pX48"));
-        let fee = parse_u128(extract_field(line, "fee")) as u64;
+        let fee_x24 = parse_u128(extract_field(line, "fee")) as u32;
         let res_x = parse_u128(extract_field(line, "resX"));
         let res_y = parse_u128(extract_field(line, "resY"));
-        let k = parse_u128(extract_field(line, "k")) as u32;
+        let k_q12 = parse_u128(extract_field(line, "k")) as u32;
         let p_next = parse_u128(extract_field(line, "pNext"));
         let fee_amt = parse_u128(extract_field(line, "feeAmt"));
 
@@ -70,10 +74,10 @@ mod cross_validation {
             name,
             dir,
             p_x48,
-            fee,
+            fee_x24,
             res_x,
             res_y,
-            k,
+            k_q12,
             amount_in,
             amount_out,
             p_next,
@@ -96,13 +100,19 @@ mod cross_validation {
             let v = parse_vector(line);
             total += 1;
 
+            let (fee_ask_x24, fee_bid_x24) = if v.dir == "xToY" {
+                (0u32, v.fee_x24)
+            } else {
+                (v.fee_x24, 0u32)
+            };
             let params = PoolParams {
                 sqrt_price_x48: v.p_x48,
                 anchor_sqrt_price_x48: v.p_x48,
-                fee_q48: v.fee,
+                fee_ask_x24,
+                fee_bid_x24,
                 reserve_x: v.res_x,
                 reserve_y: v.res_y,
-                concentration_k: v.k,
+                concentration_k_q12: v.k_q12,
             };
 
             let result = if v.dir == "xToY" {

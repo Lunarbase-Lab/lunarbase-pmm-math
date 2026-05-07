@@ -6,6 +6,7 @@ const fixedPoint48Resolution = 48
 
 var (
 	one     = uint256.NewInt(1)
+	q12     = new(uint256.Int).Lsh(one, 12)
 	q24     = new(uint256.Int).Lsh(one, 24)
 	q48     = new(uint256.Int).Lsh(one, 48)
 	q96     = new(uint256.Int).Lsh(one, 96)

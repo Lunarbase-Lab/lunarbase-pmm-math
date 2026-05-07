@@ -13,10 +13,11 @@
 //! let params = PoolParams {
 //!     sqrt_price_x48: 1u128 << 48,
 //!     anchor_sqrt_price_x48: 1u128 << 48,
-//!     fee_q48: 1u64 << 44,
+//!     fee_ask_x24: 0,
+//!     fee_bid_x24: (1u32 << 24) / 1000, // 0.10% bid fee
 //!     reserve_x: 1_000_000,
 //!     reserve_y: 1_000_000,
-//!     concentration_k: 5_000,
+//!     concentration_k_q12: 5_000,
 //! };
 //! let result = quote_x_to_y(&params, U256::from(1_000u64));
 //! let _ = result.amount_out;

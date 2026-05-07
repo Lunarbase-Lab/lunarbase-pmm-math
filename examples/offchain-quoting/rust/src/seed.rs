@@ -17,22 +17,22 @@ pub async fn seed_state(rpc_url: &str, pool: Address, cache: &mut Cache) -> Resu
     let reserve_x: u128 = contract.getXReserve().call().await?._0.to();
     let reserve_y: u128 = contract.getYReserve().call().await?._0.to();
     let state = contract.state().call().await?;
-    let anchor = contract.anchorPrice().call().await?;
-    let k = contract.concentrationK().call().await?._0;
+    let k = contract.concentrationKQ12().call().await?._0;
     let delay: u64 = contract.blockDelay().call().await?._0.to();
     let paused = contract.paused().call().await?._0;
 
-    let anchor_px48: u128 = anchor.anchorPX48.to();
-    let fee_q48: u64 = state.fee.to();
+    let anchor_price: u128 = state.anchorPrice.to();
     let p_x48: u128 = state.pX48.to();
+    let fee_ask_x24: u32 = state.feeAskX24.to();
+    let fee_bid_x24: u32 = state.feeBidX24.to();
     let latest_update_block: u64 = state.latestUpdateBlock.to();
 
     cache.set_reserves(reserve_x, reserve_y).await?;
     cache
-        .set_state(latest_update_block, anchor_px48, fee_q48)
+        .set_state(latest_update_block, anchor_price, fee_ask_x24, fee_bid_x24)
         .await?;
     cache.set_sqrt_price(p_x48).await?;
-    cache.set_concentration_k(k).await?;
+    cache.set_concentration_k_q12(k).await?;
     cache.set_block_delay(delay).await?;
     cache.set_paused(paused).await?;
 
@@ -40,11 +40,12 @@ pub async fn seed_state(rpc_url: &str, pool: Address, cache: &mut Cache) -> Resu
         head_block,
         reserve_x,
         reserve_y,
-        anchor_px48,
-        fee_q48,
+        anchor_price,
+        fee_ask_x24,
+        fee_bid_x24,
         p_x48,
         latest_update_block,
-        concentration_k = k,
+        concentration_k_q12 = k,
         block_delay = delay,
         paused,
         "seeded pool state from RPC"

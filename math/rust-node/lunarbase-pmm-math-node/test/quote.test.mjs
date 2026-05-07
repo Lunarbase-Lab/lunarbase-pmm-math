@@ -25,6 +25,25 @@ function readJsonl(filePath) {
 const deterministicVectors = readJsonl(deterministicVectorsPath);
 const fuzzVectors = readJsonl(fuzzVectorsPath);
 
+/**
+ * Build the new `QuoteParams` shape from a JSONL row.
+ * Each row exercises one direction; the JSONL `fee` field carries the
+ * directionally-relevant Q24 fee (bid for xToY, ask for yToX), so the other
+ * side is a don't-care set to 0.
+ */
+function paramsFromVector(vector) {
+  const isXToY = vector.dir === "xToY";
+  return {
+    sqrtPriceX48: String(vector.pX48),
+    feeAskX24: isXToY ? 0 : Number(vector.fee),
+    feeBidX24: isXToY ? Number(vector.fee) : 0,
+    reserveX: String(vector.resX),
+    reserveY: String(vector.resY),
+    concentrationKQ12: Number(vector.k),
+    amountIn: String(isXToY ? vector.dx : vector.dy),
+  };
+}
+
 describe("deterministic vectors (from Solidity)", () => {
   if (deterministicVectors.length === 0) {
     it("(skipped — no deterministic_vectors.jsonl)", () => {});
@@ -33,21 +52,13 @@ describe("deterministic vectors (from Solidity)", () => {
 
   for (const vector of deterministicVectors) {
     it(`${vector.name}: ${vector.dir}`, () => {
-      const params = {
-        sqrtPriceX48: vector.pX48,
-        feeQ48: vector.fee,
-        reserveX: vector.resX,
-        reserveY: vector.resY,
-        concentrationK: vector.k,
-        amountIn: vector.dir === "xToY" ? vector.dx : vector.dy,
-      };
-
+      const params = paramsFromVector(vector);
       const result = vector.dir === "xToY" ? quoteXToY(params) : quoteYToX(params);
-      const expectedOut = vector.dir === "xToY" ? vector.dy : vector.dx;
+      const expectedOut = vector.dir === "xToY" ? String(vector.dy) : String(vector.dx);
 
       assert.equal(result.amountOut, expectedOut, `${vector.name}: amountOut mismatch`);
-      assert.equal(result.sqrtPriceNext, vector.pNext, `${vector.name}: sqrtPriceNext mismatch`);
-      assert.equal(result.fee, vector.feeAmt, `${vector.name}: fee mismatch`);
+      assert.equal(result.sqrtPriceNext, String(vector.pNext), `${vector.name}: sqrtPriceNext mismatch`);
+      assert.equal(result.fee, String(vector.feeAmt), `${vector.name}: fee mismatch`);
     });
   }
 });
@@ -56,10 +67,11 @@ describe("edge cases", () => {
   it("returns zero output for zero reserves", () => {
     const result = quoteXToY({
       sqrtPriceX48: "281474976710656",
-      feeQ48: "14073748835532",
+      feeAskX24: 0,
+      feeBidX24: 838860, // 5% in Q24
       reserveX: "0",
       reserveY: "0",
-      concentrationK: 5000,
+      concentrationKQ12: 5000,
       amountIn: "1000000000000000000",
     });
     assert.equal(result.amountOut, "0");
@@ -68,38 +80,40 @@ describe("edge cases", () => {
   it("accepts hex input strings", () => {
     const result = quoteXToY({
       sqrtPriceX48: "0x" + BigInt("281474976710656").toString(16),
-      feeQ48: "0x" + BigInt("14073748835532").toString(16),
+      feeAskX24: 0,
+      feeBidX24: 838860,
       reserveX: "0x" + BigInt("1000000000000000000000").toString(16),
       reserveY: "0x" + BigInt("1000000000000000000000").toString(16),
-      concentrationK: 5000,
+      concentrationKQ12: 5000,
       amountIn: "0x" + BigInt("1000000000000000000").toString(16),
     });
 
-    assert.equal(result.amountOut, "949975824130540819");
-    assert.equal(result.sqrtPriceNext, "281467813676027");
-    assert.equal(result.fee, "49998727585814946");
+    // V1 deterministic baseline: pX48=Q48, 5% bid, eq reserves, k=5000, dx=1e18.
+    assert.equal(result.amountOut, "949987816809994001");
+    assert.equal(result.sqrtPriceNext, "281474976660325");
+    assert.equal(result.fee, "49999308586734514");
   });
 
   it("quoteXToY and quoteYToX match the deterministic price=1 vectors", () => {
-    const params = {
+    const baseParams = {
       sqrtPriceX48: "281474976710656",
-      feeQ48: "14073748835532",
       reserveX: "1000000000000000000000",
       reserveY: "1000000000000000000000",
-      concentrationK: 5000,
+      concentrationKQ12: 5000,
       amountIn: "1000000000000000000",
     };
 
-    const xToY = quoteXToY(params);
-    const yToX = quoteYToX(params);
+    const xToY = quoteXToY({ ...baseParams, feeAskX24: 0, feeBidX24: 838860 });
+    const yToX = quoteYToX({ ...baseParams, feeAskX24: 838860, feeBidX24: 0 });
 
-    assert.equal(xToY.amountOut, "949975824130540819");
-    assert.equal(xToY.sqrtPriceNext, "281467813676027");
-    assert.equal(xToY.fee, "49998727585814946");
+    // V1 (xToY) and V12 (yToX) from the deterministic generator.
+    assert.equal(xToY.amountOut, "949987816809994001");
+    assert.equal(xToY.sqrtPriceNext, "281474976660325");
+    assert.equal(xToY.fee, "49999308586734514");
 
-    assert.equal(yToX.amountOut, "949975824123168435");
-    assert.equal(yToX.sqrtPriceNext, "281482139927576");
-    assert.equal(yToX.fee, "49998727585426925");
+    assert.equal(yToX.amountOut, "949987816640155504");
+    assert.equal(yToX.sqrtPriceNext, "281474976760987");
+    assert.equal(yToX.fee, "49999308577795655");
   });
 });
 
@@ -114,22 +128,15 @@ describe("fuzz vectors (from Solidity)", () => {
 
     for (let i = 0; i < fuzzVectors.length; i += 1) {
       const vector = fuzzVectors[i];
-      const params = {
-        sqrtPriceX48: vector.pX48,
-        feeQ48: vector.fee,
-        reserveX: vector.resX,
-        reserveY: vector.resY,
-        concentrationK: vector.k,
-        amountIn: vector.dir === "xToY" ? vector.dx : vector.dy,
-      };
+      const params = paramsFromVector(vector);
 
       const result = vector.dir === "xToY" ? quoteXToY(params) : quoteYToX(params);
-      const expectedOut = vector.dir === "xToY" ? vector.dy : vector.dx;
+      const expectedOut = vector.dir === "xToY" ? String(vector.dy) : String(vector.dx);
 
       if (
         result.amountOut !== expectedOut
-        || result.sqrtPriceNext !== vector.pNext
-        || result.fee !== vector.feeAmt
+        || result.sqrtPriceNext !== String(vector.pNext)
+        || result.fee !== String(vector.feeAmt)
       ) {
         failures.push(
           `Line ${i + 1} (${vector.dir}): out=${result.amountOut} expected=${expectedOut}, `

@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 pub struct PoolState {
     pub sqrt_price_x48: u128,
     pub anchor_sqrt_price_x48: u128,
+    /// Legacy build still carries a single Q48 fee that we approximately
+    /// re-encode as a Q24 fee for the new asymmetric API by truncating the
+    /// upper 24 bits. Real deployments must migrate to per-direction fees.
     pub fee_q48: u64,
     #[allow(dead_code)]
     pub latest_update_block: u64,
@@ -20,13 +23,15 @@ pub struct PoolState {
 
 impl PoolState {
     pub fn to_params(&self) -> PoolParams {
+        let fee_x24 = (self.fee_q48 >> 24) as u32;
         PoolParams {
             sqrt_price_x48: self.sqrt_price_x48,
             anchor_sqrt_price_x48: self.anchor_sqrt_price_x48,
-            fee_q48: self.fee_q48,
+            fee_ask_x24: fee_x24,
+            fee_bid_x24: fee_x24,
             reserve_x: self.reserve_x,
             reserve_y: self.reserve_y,
-            concentration_k: self.concentration_k,
+            concentration_k_q12: self.concentration_k,
         }
     }
 

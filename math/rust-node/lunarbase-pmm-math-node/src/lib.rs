@@ -109,20 +109,31 @@ fn parse_u80_field(s: &str) -> Result<u128> {
     Ok(v.as_u128())
 }
 
+fn parse_u24_field(name: &str, value: u32) -> Result<u32> {
+    if value > (1u32 << 24) - 1 {
+        return Err(Error::from_reason(format!(
+            "{name} exceeds uint24 range: {value}"
+        )));
+    }
+    Ok(value)
+}
+
 #[napi(object)]
 pub struct QuoteParams {
     /// sqrtPriceX48 as decimal or hex string
     pub sqrt_price_x48: String,
-    /// anchor sqrtPriceX48 as decimal or hex string. Defaults to sqrtPriceX48 when omitted by callers compiled against older API.
+    /// anchor sqrtPriceX48 as decimal or hex string. Defaults to sqrtPriceX48 when omitted.
     pub anchor_sqrt_price_x48: Option<String>,
-    /// fee in Q48 as decimal or hex string
-    pub fee_q48: String,
+    /// fee charged on Y → X swaps in Q24 (uint24).
+    pub fee_ask_x24: u32,
+    /// fee charged on X → Y swaps in Q24 (uint24).
+    pub fee_bid_x24: u32,
     /// reserve X as decimal or hex string
     pub reserve_x: String,
     /// reserve Y as decimal or hex string
     pub reserve_y: String,
-    /// concentration multiplier k
-    pub concentration_k: u32,
+    /// concentration multiplier in Q20.12 (uint32). Effective K = concentration_k_q12 / 2^12.
+    pub concentration_k_q12: u32,
     /// input amount as decimal or hex string
     pub amount_in: String,
 }
@@ -143,10 +154,8 @@ fn to_pool_params(p: &QuoteParams) -> Result<(PoolParams, U256)> {
         Some(anchor) => parse_u80_field(anchor)?,
         None => sqrt_price,
     };
-    let fee_q48_val = parse_u128_field(&p.fee_q48)?;
-    if fee_q48_val > u128::from(u64::MAX) {
-        return Err(Error::from_reason("fee_q48 exceeds u48"));
-    }
+    let fee_ask_x24 = parse_u24_field("fee_ask_x24", p.fee_ask_x24)?;
+    let fee_bid_x24 = parse_u24_field("fee_bid_x24", p.fee_bid_x24)?;
     let reserve_x = parse_u128_field(&p.reserve_x)?;
     let reserve_y = parse_u128_field(&p.reserve_y)?;
     let amount_in = parse_u256(&p.amount_in)?;
@@ -155,10 +164,11 @@ fn to_pool_params(p: &QuoteParams) -> Result<(PoolParams, U256)> {
         PoolParams {
             sqrt_price_x48: sqrt_price,
             anchor_sqrt_price_x48: anchor_sqrt_price,
-            fee_q48: fee_q48_val as u64,
+            fee_ask_x24,
+            fee_bid_x24,
             reserve_x,
             reserve_y,
-            concentration_k: p.concentration_k,
+            concentration_k_q12: p.concentration_k_q12,
         },
         amount_in,
     ))

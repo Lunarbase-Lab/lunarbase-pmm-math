@@ -36,8 +36,8 @@ impl Cache {
     fn k_sqrt_price(&self) -> String {
         format!("sqrtprice:{}", self.pool_tag)
     }
-    fn k_concentration_k(&self) -> String {
-        format!("pmm:concentrationK:{}", self.pool_tag)
+    fn k_concentration_k_q12(&self) -> String {
+        format!("pmm:concentrationKQ12:{}", self.pool_tag)
     }
     fn k_block_delay(&self) -> String {
         format!("pmm:blockDelay:{}", self.pool_tag)
@@ -74,11 +74,18 @@ impl Cache {
         Ok(())
     }
 
-    pub async fn set_state(&mut self, block: u64, anchor_px48: u128, fee_q48: u64) -> Result<()> {
+    pub async fn set_state(
+        &mut self,
+        block: u64,
+        anchor_price: u128,
+        fee_ask_x24: u32,
+        fee_bid_x24: u32,
+    ) -> Result<()> {
         let payload = serde_json::to_string(&UpdatesPayload {
             block,
-            anchor_px48: anchor_px48.to_string(),
-            fee: fee_q48.to_string(),
+            anchor_price: anchor_price.to_string(),
+            fee_ask_x24,
+            fee_bid_x24,
         })?;
         let _: () = self.conn.set_ex(self.k_updates(), payload, UPD_TTL).await?;
         Ok(())
@@ -92,10 +99,10 @@ impl Cache {
         Ok(())
     }
 
-    pub async fn set_concentration_k(&mut self, k: u32) -> Result<()> {
+    pub async fn set_concentration_k_q12(&mut self, k: u32) -> Result<()> {
         let _: () = self
             .conn
-            .set(self.k_concentration_k(), k.to_string())
+            .set(self.k_concentration_k_q12(), k.to_string())
             .await?;
         Ok(())
     }
@@ -146,7 +153,7 @@ impl Cache {
             self.k_reserves(),
             self.k_updates(),
             self.k_sqrt_price(),
-            self.k_concentration_k(),
+            self.k_concentration_k_q12(),
             self.k_block_delay(),
             self.k_paused(),
         ];
@@ -154,7 +161,7 @@ impl Cache {
         let reserves = raw[0].as_ref();
         let updates = raw[1].as_ref();
         let sqrt_price = raw[2].as_ref();
-        let concentration_k = raw[3].as_ref();
+        let concentration_k_q12 = raw[3].as_ref();
         let block_delay = raw[4].as_ref();
         let paused = raw[5].as_ref();
 
@@ -167,14 +174,13 @@ impl Cache {
 
         let reserve_x = parse_decimal_u128(&r.0).unwrap_or(0);
         let reserve_y = parse_decimal_u128(&r.1).unwrap_or(0);
-        let anchor_px48 = parse_decimal_u128(&u.anchor_px48).unwrap_or(0);
-        let fee_q48 = u.fee.parse::<u64>().unwrap_or(0);
+        let anchor_price = parse_decimal_u128(&u.anchor_price).unwrap_or(0);
 
         let sqrt_price_x48 = sqrt_price
             .and_then(|s| parse_decimal_u128(s))
-            .unwrap_or(anchor_px48);
+            .unwrap_or(anchor_price);
 
-        let concentration_k = concentration_k
+        let concentration_k_q12 = concentration_k_q12
             .and_then(|s| s.parse::<u32>().ok())
             .unwrap_or(0);
         let block_delay = block_delay.and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
@@ -182,12 +188,13 @@ impl Cache {
 
         Ok(Some(PoolState {
             sqrt_price_x48,
-            anchor_sqrt_price_x48: anchor_px48,
-            fee_q48,
+            anchor_sqrt_price_x48: anchor_price,
+            fee_ask_x24: u.fee_ask_x24,
+            fee_bid_x24: u.fee_bid_x24,
             latest_update_block: u.block,
             reserve_x,
             reserve_y,
-            concentration_k,
+            concentration_k_q12,
             block_delay,
             paused,
         }))

@@ -41,10 +41,17 @@ async fn handle_log(log: LogEvent, cache: &mut Cache) -> Result<()> {
 
     if topic0 == sig::<Pool::StateUpdated>() {
         let ev = decode::<Pool::StateUpdated>(&log)?;
-        let anchor: u128 = ev.state.anchorPX48.to();
-        let fee: u64 = ev.state.fee.to();
-        cache.set_state(block, anchor, fee).await?;
-        info!(block, anchor_px48 = anchor, fee_q48 = fee, "StateUpdated");
+        let anchor: u128 = ev.anchorPrice.to();
+        let fee_ask: u32 = ev.feeAskX24.to();
+        let fee_bid: u32 = ev.feeBidX24.to();
+        cache.set_state(block, anchor, fee_ask, fee_bid).await?;
+        info!(
+            block,
+            anchor_price = anchor,
+            fee_ask_x24 = fee_ask,
+            fee_bid_x24 = fee_bid,
+            "StateUpdated"
+        );
     } else if topic0 == sig::<Pool::Sync>() {
         let ev = decode::<Pool::Sync>(&log)?;
         let x: u128 = ev.reserveX;
@@ -58,10 +65,13 @@ async fn handle_log(log: LogEvent, cache: &mut Cache) -> Result<()> {
         } else {
             warn!("snapshot empty when applying SwapExecuted");
         }
-    } else if topic0 == sig::<Pool::ConcentrationKSet>() {
-        let ev = decode::<Pool::ConcentrationKSet>(&log)?;
-        cache.set_concentration_k(ev.concentrationK).await?;
-        info!(concentration_k = ev.concentrationK, "ConcentrationKSet");
+    } else if topic0 == sig::<Pool::ConcentrationKQ12Set>() {
+        let ev = decode::<Pool::ConcentrationKQ12Set>(&log)?;
+        cache.set_concentration_k_q12(ev.concentrationKQ12).await?;
+        info!(
+            concentration_k_q12 = ev.concentrationKQ12,
+            "ConcentrationKQ12Set"
+        );
     } else if topic0 == sig::<Pool::BlockDelaySet>() {
         let ev = decode::<Pool::BlockDelaySet>(&log)?;
         let d: u64 = ev.blockDelay.to();

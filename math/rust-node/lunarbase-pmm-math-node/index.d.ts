@@ -6,16 +6,18 @@
 export interface QuoteParams {
   /** sqrtPriceX48 as decimal or hex string */
   sqrtPriceX48: string
-  /** anchor sqrtPriceX48 as decimal or hex string. Defaults to sqrtPriceX48 when omitted by callers compiled against older API. */
+  /** anchor sqrtPriceX48 as decimal or hex string. Defaults to sqrtPriceX48 when omitted. */
   anchorSqrtPriceX48?: string
-  /** fee in Q48 as decimal or hex string */
-  feeQ48: string
+  /** fee charged on Y → X swaps in Q24 (uint24). */
+  feeAskX24: number
+  /** fee charged on X → Y swaps in Q24 (uint24). */
+  feeBidX24: number
   /** reserve X as decimal or hex string */
   reserveX: string
   /** reserve Y as decimal or hex string */
   reserveY: string
-  /** concentration multiplier k */
-  concentrationK: number
+  /** concentration multiplier in Q20.12 (uint32). Effective K = concentration_k_q12 / 2^12. */
+  concentrationKQ12: number
   /** input amount as decimal or hex string */
   amountIn: string
 }
