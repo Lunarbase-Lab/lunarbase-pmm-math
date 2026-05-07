@@ -163,7 +163,7 @@ Two artifacts are published from each release:
 | Registry  | Package                   | Install                                       |
 | --------- | ------------------------- | --------------------------------------------- |
 | crates.io | `lunarbase-pmm-math`      | `cargo add lunarbase-pmm-math`                |
-| npm       | `@lunarbase/pmm-math`     | `npm install @lunarbase/pmm-math`             |
+| npm       | `@lunarbase-lab/pmm-math`     | `npm install @lunarbase-lab/pmm-math`             |
 
 Both are cut by `.github/workflows/release.yml` on a `v*` tag push. The
 workflow:
@@ -172,7 +172,7 @@ workflow:
 2. cross-builds the N-API addon for **macOS-arm64** and **linux-x64-gnu**
    in a matrix;
 3. fans the per-platform `.node` files into npm sub-packages
-   (`@lunarbase/pmm-math-darwin-arm64`, `@lunarbase/pmm-math-linux-x64-gnu`)
+   (`@lunarbase-lab/pmm-math-darwin-arm64`, `@lunarbase-lab/pmm-math-linux-x64-gnu`)
    and publishes the main meta-package with `optionalDependencies` so
    `npm install` picks up only the binary that matches the consumer's
    `process.platform` / `arch`.
@@ -191,7 +191,7 @@ git push origin v0.1.X                # workflow fires
 ```
 
 Required GitHub secrets: `CARGO_REGISTRY_TOKEN` (from <https://crates.io/me>),
-`NPM_TOKEN` (npm Automation token with publish on the `@lunarbase` scope).
+`NPM_TOKEN` (npm Automation token with publish on the `@lunarbase-lab` scope).
 
 ## License
 

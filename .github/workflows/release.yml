@@ -5,7 +5,7 @@ name: Release
 #
 # Required repo secrets:
 #   - CARGO_REGISTRY_TOKEN  → crates.io API token (https://crates.io/me)
-#   - NPM_TOKEN             → npm Automation token with publish on @lunarbase scope
+#   - NPM_TOKEN             → npm Automation token with publish on @lunarbase-lab scope
 #
 # Trigger:
 #   git tag v0.1.0 && git push --tags
@@ -113,7 +113,7 @@ jobs:
   # npm: publish main package + per-platform sub-packages
   # ──────────────────────────────────────────────────────────────────
   publish-npm:
-    name: Publish @lunarbase/pmm-math to npm
+    name: Publish @lunarbase-lab/pmm-math to npm
     needs: build-napi
     runs-on: ubuntu-latest
     defaults:

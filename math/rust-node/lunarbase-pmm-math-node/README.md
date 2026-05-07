@@ -1,4 +1,4 @@
-# @lunarbase/pmm-math
+# @lunarbase-lab/pmm-math
 
 N-API binding exposing [`lunarbase-pmm-math`](https://crates.io/crates/lunarbase-pmm-math)
 to Node.js. Bit-exact mirror of the on-chain LunarBase Curve PMM quoting
@@ -8,7 +8,7 @@ generated from the on-chain Solidity contract.
 ## Install
 
 ```bash
-npm install @lunarbase/pmm-math
+npm install @lunarbase-lab/pmm-math
 ```
 
 The native `.node` binary is shipped per-platform via npm's
@@ -19,8 +19,8 @@ is downloaded.
 
 | OS    | Architecture | Sub-package                          |
 | ----- | ------------ | ------------------------------------ |
-| macOS | arm64        | `@lunarbase/pmm-math-darwin-arm64`   |
-| Linux | x64 (glibc)  | `@lunarbase/pmm-math-linux-x64-gnu`  |
+| macOS | arm64        | `@lunarbase-lab/pmm-math-darwin-arm64`   |
+| Linux | x64 (glibc)  | `@lunarbase-lab/pmm-math-linux-x64-gnu`  |
 
 Other targets (`linux-arm64-gnu`, `linux-x64-musl`, `darwin-x64`,
 `win32-x64-msvc`) are not currently shipped — open an issue if you need
@@ -29,7 +29,7 @@ one.
 ## Usage
 
 ```ts
-import { quoteXToY, quoteYToX, type QuoteParams, type QuoteResult } from "@lunarbase/pmm-math";
+import { quoteXToY, quoteYToX, type QuoteParams, type QuoteResult } from "@lunarbase-lab/pmm-math";
 
 const params: QuoteParams = {
   // Live sqrt-price (uint80, Q32.48). Optional — defaults to anchorSqrtPriceX48.
