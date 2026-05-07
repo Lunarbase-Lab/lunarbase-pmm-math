@@ -162,13 +162,11 @@ jobs:
 
       - name: Generate per-triple npm/<abi>/ skeleton (package.json + README)
         # `napi prepublish` reads npm/<abi>/package.json to know what to ship
-        # per platform; it does NOT create those files itself. This step
-        # writes them based on `napi.triples` in the main package.json.
-        # Note: `napi create-npm-dir` (singular) is per-target — invoke once
-        # per triple in `napi.triples.additional`.
-        run: |
-          npx napi create-npm-dir -t aarch64-apple-darwin
-          npx napi create-npm-dir -t x86_64-unknown-linux-gnu
+        # per platform; it does NOT create those files itself.
+        # `napi create-npm-dir` (singular!) reads `napi.triples.additional`
+        # from the main package.json and generates one subdir per triple.
+        # `-t .` means "output base dir = cwd" → produces ./npm/<abi>/.
+        run: npx napi create-npm-dir -t .
 
       - name: Move .node files into npm/<short-abi>/
         # We do this manually instead of `napx napi artifacts` because the
