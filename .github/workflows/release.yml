@@ -164,7 +164,11 @@ jobs:
         # `napi prepublish` reads npm/<abi>/package.json to know what to ship
         # per platform; it does NOT create those files itself. This step
         # writes them based on `napi.triples` in the main package.json.
-        run: npx napi create-npm-dirs
+        # Note: `napi create-npm-dir` (singular) is per-target — invoke once
+        # per triple in `napi.triples.additional`.
+        run: |
+          npx napi create-npm-dir -t aarch64-apple-darwin
+          npx napi create-npm-dir -t x86_64-unknown-linux-gnu
 
       - name: Move .node files into npm/<short-abi>/
         # We do this manually instead of `napx napi artifacts` because the
