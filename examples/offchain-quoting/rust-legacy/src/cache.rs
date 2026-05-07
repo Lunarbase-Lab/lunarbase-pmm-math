@@ -8,7 +8,6 @@ use crate::pool_state::{parse_decimal_u128, PoolState, ReservesPayload, UpdatesP
 const RESERVES_TTL: u64 = 10;
 const UPD_TTL: u64 = 6;
 const SQRT_TTL: u64 = 6;
-const PARAM_TTL: u64 = 60;
 const LOG_TTL: u64 = 10;
 
 pub struct Cache {
@@ -96,23 +95,20 @@ impl Cache {
     pub async fn set_concentration_k(&mut self, k: u32) -> Result<()> {
         let _: () = self
             .conn
-            .set_ex(self.k_concentration_k(), k.to_string(), PARAM_TTL)
+            .set(self.k_concentration_k(), k.to_string())
             .await?;
         Ok(())
     }
 
     pub async fn set_block_delay(&mut self, d: u64) -> Result<()> {
-        let _: () = self
-            .conn
-            .set_ex(self.k_block_delay(), d.to_string(), PARAM_TTL)
-            .await?;
+        let _: () = self.conn.set(self.k_block_delay(), d.to_string()).await?;
         Ok(())
     }
 
     pub async fn set_paused(&mut self, p: bool) -> Result<()> {
         let _: () = self
             .conn
-            .set_ex(self.k_paused(), if p { "1" } else { "0" }, PARAM_TTL)
+            .set(self.k_paused(), if p { "1" } else { "0" })
             .await?;
         Ok(())
     }
