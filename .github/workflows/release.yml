@@ -43,6 +43,11 @@ jobs:
         run: cargo publish -p lunarbase-pmm-math --dry-run
 
       - name: cargo publish
+        # `continue-on-error: true` lets re-runs of the same tag pass: the
+        # second `cargo publish` will fail with "version already published"
+        # but that's expected and we don't want it to block the npm pipeline
+        # (which has its own `needs: build-napi` chain).
+        continue-on-error: true
         run: cargo publish -p lunarbase-pmm-math --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   # ──────────────────────────────────────────────────────────────────
@@ -134,6 +139,19 @@ jobs:
           path: math/rust-node/lunarbase-pmm-math-node/artifacts
           pattern: bindings-*
 
+      - name: Show downloaded layout (BEFORE napi artifacts)
+        # Critical diagnostic step: napi artifacts expects exactly
+        #   ./artifacts/bindings-<full-rust-triple>/<binary>.<short-abi>.node
+        # If this listing doesn't show a `.node` file inside each
+        # bindings-<triple>/ subdir, the upload-artifact step is the culprit.
+        run: |
+          echo "=== pwd ==="
+          pwd
+          echo "=== artifacts/ tree ==="
+          ls -laR artifacts/ || echo "artifacts/ missing"
+          echo "=== package.json napi config ==="
+          node -e "console.log(JSON.stringify(require('./package.json').napi, null, 2))"
+
       - name: Restore js metadata to package root
         # index.cjs/index.d.ts ride inside every per-platform artifact and
         # are byte-identical (auto-generated platform-loader + TS types).
@@ -142,15 +160,22 @@ jobs:
           cp artifacts/bindings-x86_64-unknown-linux-gnu/index.cjs index.cjs
           cp artifacts/bindings-x86_64-unknown-linux-gnu/index.d.ts index.d.ts
 
-      - name: Move .node files into npm/<short-triple>/
-        run: npx napi artifacts
+      - name: Move .node files into npm/<short-abi>/
+        # We do this manually instead of `napx napi artifacts` because the
+        # latter has been flaky on this layout (errors with ENOENT trying to
+        # open the destination after a silent source mismatch). One-line
+        # `mv` per platform is explicit and easy to debug.
+        run: |
+          mkdir -p npm/darwin-arm64 npm/linux-x64-gnu
+          mv artifacts/bindings-aarch64-apple-darwin/lunarbase-pmm-math.darwin-arm64.node npm/darwin-arm64/
+          mv artifacts/bindings-x86_64-unknown-linux-gnu/lunarbase-pmm-math.linux-x64-gnu.node npm/linux-x64-gnu/
 
-      - name: Show final layout (debug aid)
+      - name: Show final layout (AFTER napi artifacts)
         run: |
           echo "=== package root ==="
           ls -la
-          echo "=== npm/ ==="
-          ls -R npm/ || true
+          echo "=== npm/ tree ==="
+          ls -laR npm/ || true
 
       - name: Publish to npm
         # `npm publish` triggers `prepublishOnly` (= `napi prepublish -t npm
