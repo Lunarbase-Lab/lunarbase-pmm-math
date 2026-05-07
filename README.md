@@ -156,6 +156,43 @@ Both implementations replay every vector and assert bit-exact equality with
 the on-chain reference. When regenerating vectors from Solidity, update both
 locations.
 
+## Releases
+
+Two artifacts are published from each release:
+
+| Registry  | Package                   | Install                                       |
+| --------- | ------------------------- | --------------------------------------------- |
+| crates.io | `lunarbase-pmm-math`      | `cargo add lunarbase-pmm-math`                |
+| npm       | `@lunarbase/pmm-math`     | `npm install @lunarbase/pmm-math`             |
+
+Both are cut by `.github/workflows/release.yml` on a `v*` tag push. The
+workflow:
+
+1. dry-runs and publishes the pure-Rust crate to crates.io (one job);
+2. cross-builds the N-API addon for **macOS-arm64** and **linux-x64-gnu**
+   in a matrix;
+3. fans the per-platform `.node` files into npm sub-packages
+   (`@lunarbase/pmm-math-darwin-arm64`, `@lunarbase/pmm-math-linux-x64-gnu`)
+   and publishes the main meta-package with `optionalDependencies` so
+   `npm install` picks up only the binary that matches the consumer's
+   `process.platform` / `arch`.
+
+To cut a release:
+
+```bash
+make publish-dry-run                  # locally validate packaging
+# bump versions:
+#   - Cargo.toml [workspace.package].version
+#   - math/rust-node/lunarbase-pmm-math-node/package.json .version
+#   - math/rust-node/lunarbase-pmm-math-node/package.json .optionalDependencies values
+git commit -am "release v0.1.X"
+git tag v0.1.X
+git push origin v0.1.X                # workflow fires
+```
+
+Required GitHub secrets: `CARGO_REGISTRY_TOKEN` (from <https://crates.io/me>),
+`NPM_TOKEN` (npm Automation token with publish on the `@lunarbase` scope).
+
 ## License
 
 Dual-licensed under either of:

@@ -17,7 +17,7 @@ pub async fn seed_state(rpc_url: &str, pool: Address, cache: &mut Cache) -> Resu
     let reserve_x: u128 = contract.getXReserve().call().await?._0.to();
     let reserve_y: u128 = contract.getYReserve().call().await?._0.to();
     let state = contract.state().call().await?;
-    let k = contract.concentrationKQ12().call().await?._0;
+    let k = contract.concentrationK().call().await?._0;
     let delay: u64 = contract.blockDelay().call().await?._0.to();
     let paused = contract.paused().call().await?._0;
 

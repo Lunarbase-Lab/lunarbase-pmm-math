@@ -1,0 +1,160 @@
+name: Release
+
+# Publishes the pure-Rust crate to crates.io and the N-API binding to npm
+# in a single run, gated on a `v*` tag (e.g. `v0.1.0`).
+#
+# Required repo secrets:
+#   - CARGO_REGISTRY_TOKEN  → crates.io API token (https://crates.io/me)
+#   - NPM_TOKEN             → npm Automation token with publish on @lunarbase scope
+#
+# Trigger:
+#   git tag v0.1.0 && git push --tags
+#
+# The job graph is:
+#   publish-crates  ─────────────────────────────────────────────┐
+#                                                                ▼
+#   build-napi (matrix: macos-arm64, linux-x64) ─→ publish-npm
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────
+  # crates.io: pure Rust core
+  # ──────────────────────────────────────────────────────────────────
+  publish-crates:
+    name: Publish lunarbase-pmm-math to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo publish (dry-run)
+        run: cargo publish -p lunarbase-pmm-math --dry-run
+
+      - name: cargo publish
+        run: cargo publish -p lunarbase-pmm-math --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # ──────────────────────────────────────────────────────────────────
+  # NAPI: build per-platform binaries
+  # ──────────────────────────────────────────────────────────────────
+  build-napi:
+    name: Build NAPI (${{ matrix.target }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - host: macos-14            # macOS-arm64 native runner
+            target: aarch64-apple-darwin
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.host }}
+    defaults:
+      run:
+        working-directory: math/rust-node/lunarbase-pmm-math-node
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> ../../../target
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install npm deps
+        run: npm install --ignore-scripts
+
+      - name: Build .node binary
+        run: npx napi build --platform --release --target ${{ matrix.target }}
+
+      - name: Rename auto-generated index.js → index.cjs
+        run: mv -f index.js index.cjs
+
+      - name: Upload .node + js metadata
+        # index.cjs/index.d.ts are identical across targets (auto-generated
+        # platform-detection code + TS types). Upload them from every job;
+        # `merge-multiple` will deduplicate on download.
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.target }}
+          path: |
+            math/rust-node/lunarbase-pmm-math-node/lunarbase-pmm-math.*.node
+            math/rust-node/lunarbase-pmm-math-node/index.cjs
+            math/rust-node/lunarbase-pmm-math-node/index.d.ts
+          if-no-files-found: error
+          retention-days: 1
+
+  # ──────────────────────────────────────────────────────────────────
+  # npm: publish main package + per-platform sub-packages
+  # ──────────────────────────────────────────────────────────────────
+  publish-npm:
+    name: Publish @lunarbase/pmm-math to npm
+    needs: build-napi
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: math/rust-node/lunarbase-pmm-math-node
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org/
+
+      - name: Install npm deps
+        run: npm install --ignore-scripts
+
+      - name: Download all .node artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: math/rust-node/lunarbase-pmm-math-node/artifacts
+          pattern: bindings-*
+          merge-multiple: true
+
+      - name: Restore js metadata to package root
+        # `napi artifacts` only moves *.node files into npm/<triple>/; the
+        # auto-generated index.cjs/index.d.ts (uploaded alongside) stay in
+        # artifacts/ and must be put back at the package root so the main
+        # package tarball contains them.
+        run: |
+          cp artifacts/index.cjs index.cjs
+          cp artifacts/index.d.ts index.d.ts
+
+      - name: Reorganise artifacts into per-platform dirs
+        run: npx napi artifacts
+
+      - name: Generate per-platform npm sub-packages and publish them
+        # `napi prepublish` writes per-triple package.json files into
+        # npm/<triple>/, then runs `npm publish` from each. --skip-gh-release
+        # disables the GitHub Releases asset upload (we don't use it).
+        run: npx napi prepublish -t npm --skip-gh-release
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish main package
+        # --ignore-scripts skips `prepublishOnly` (which would re-run
+        # `napi prepublish` and try to re-publish the sub-packages, causing
+        # "version already published" errors).
+        run: npm publish --access public --ignore-scripts
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

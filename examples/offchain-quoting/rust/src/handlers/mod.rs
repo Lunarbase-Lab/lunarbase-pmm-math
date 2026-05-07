@@ -65,12 +65,12 @@ async fn handle_log(log: LogEvent, cache: &mut Cache) -> Result<()> {
         } else {
             warn!("snapshot empty when applying SwapExecuted");
         }
-    } else if topic0 == sig::<Pool::ConcentrationKQ12Set>() {
-        let ev = decode::<Pool::ConcentrationKQ12Set>(&log)?;
-        cache.set_concentration_k_q12(ev.concentrationKQ12).await?;
+    } else if topic0 == sig::<Pool::ConcentrationKSet>() {
+        let ev = decode::<Pool::ConcentrationKSet>(&log)?;
+        cache.set_concentration_k_q12(ev.concentrationK).await?;
         info!(
-            concentration_k_q12 = ev.concentrationKQ12,
-            "ConcentrationKQ12Set"
+            concentration_k_q12 = ev.concentrationK,
+            "ConcentrationKSet"
         );
     } else if topic0 == sig::<Pool::BlockDelaySet>() {
         let ev = decode::<Pool::BlockDelaySet>(&log)?;

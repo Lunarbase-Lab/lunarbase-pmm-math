@@ -1,9 +1,8 @@
 {
-  "name": "lunarbase-pmm-math-node",
+  "name": "@lunarbase/pmm-math",
   "version": "0.1.0",
-  "description": "N-API binding exposing lunarbase-pmm-math to Node.js.",
+  "description": "N-API binding exposing lunarbase-pmm-math to Node.js. Bit-exact mirror of the on-chain LunarBase Curve PMM quoting math.",
   "license": "MIT OR Apache-2.0",
-  "private": true,
   "type": "module",
   "main": "wrapper.js",
   "types": "index.d.ts",
@@ -18,20 +17,49 @@
     "wrapper.js",
     "index.cjs",
     "index.d.ts",
-    "lunarbase-pmm-math-node.*.node"
+    "README.md"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lunarbase/lunarbase-pmm-math.git",
+    "directory": "math/rust-node/lunarbase-pmm-math-node"
+  },
+  "homepage": "https://github.com/lunarbase/lunarbase-pmm-math#readme",
+  "bugs": {
+    "url": "https://github.com/lunarbase/lunarbase-pmm-math/issues"
+  },
+  "keywords": [
+    "lunarbase",
+    "pmm",
+    "amm",
+    "defi",
+    "napi",
+    "rust"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "napi": {
-    "name": "lunarbase-pmm-math-node",
+    "name": "lunarbase-pmm-math",
     "triples": {
-      "defaults": true
+      "defaults": false,
+      "additional": [
+        "aarch64-apple-darwin",
+        "x86_64-unknown-linux-gnu"
+      ]
     }
+  },
+  "optionalDependencies": {
+    "@lunarbase/pmm-math-darwin-arm64": "0.1.0",
+    "@lunarbase/pmm-math-linux-x64-gnu": "0.1.0"
   },
   "scripts": {
     "build": "CARGO_TARGET_DIR=target napi build --platform --release && mv -f index.js index.cjs",
     "build:debug": "CARGO_TARGET_DIR=target napi build --platform && mv -f index.js index.cjs",
     "artifacts": "napi artifacts",
     "test": "node --test test/quote.test.mjs",
-    "prepublishOnly": "napi prepublish -t npm"
+    "prepublishOnly": "napi prepublish -t npm --skip-gh-release"
   },
   "devDependencies": {
     "@napi-rs/cli": "^2.18.4"

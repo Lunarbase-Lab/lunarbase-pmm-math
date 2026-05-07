@@ -9,6 +9,15 @@ description = "Pure Rust port of the LunarBase Curve PMM quoting math, bit-exact
 readme = "../../../README.md"
 keywords = ["lunarbase", "pmm", "amm", "defi", "math"]
 categories = ["mathematics", "no-std::no-alloc"]
+# Heavy test fixtures live in the repo root and are pulled into `src/{tests,
+# fuzz_tests}.rs` via `include_str!` only under `#[cfg(test)]`. Excluding them
+# keeps the published crate small without breaking `cargo build` for users.
+exclude = [
+    "deterministic_vectors.jsonl",
+    "fuzz_vectors.jsonl",
+    "benches/",
+    ".bench-baseline.txt",
+]
 
 [lib]
 crate-type = ["rlib"]

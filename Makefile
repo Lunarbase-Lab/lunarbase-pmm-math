@@ -51,6 +51,7 @@ ALL_RUST_CROSS_TARGETS := \
         go-cross-linux-amd64 go-cross-linux-arm64 \
         go-cross-darwin-amd64 go-cross-darwin-arm64 \
         go-cross-windows-amd64 go-cross-all \
+        publish-dry-run publish-crates-dry publish-npm-dry release-tag \
         build test clean fmt fmt-check lint bench bench-rust bench-go
 
 # ---------- top-level ----------
@@ -199,6 +200,35 @@ go-cross-all: \
         go-cross-darwin-amd64 \
         go-cross-darwin-arm64 \
         go-cross-windows-amd64
+
+# ---------- publish (CI does the real publish; targets here are dry-run) ----------
+# Real publishing happens via `.github/workflows/release.yml`, triggered by a
+# `v*` tag push. Locally run `make publish-dry-run` before tagging to catch
+# packaging errors early.
+
+publish-crates-dry:
+	$(CARGO) publish -p lunarbase-pmm-math --dry-run --allow-dirty
+
+publish-npm-dry:
+	cd $(NODE_DIR) && npm install --ignore-scripts
+	cd $(NODE_DIR) && npm run build
+	cd $(NODE_DIR) && npm pack --dry-run
+
+publish-dry-run: publish-crates-dry publish-npm-dry
+	@echo
+	@echo "✓ crate packaging OK; npm package contents listed above."
+	@echo "  Bump versions in:"
+	@echo "    - Cargo.toml [workspace.package].version"
+	@echo "    - $(NODE_DIR)/package.json .version + .optionalDependencies values"
+	@echo "  Then: git tag vX.Y.Z && git push --tags"
+
+# Convenience target that bumps the npm package version, prints the next steps,
+# and exits without pushing anything. Use VERSION=X.Y.Z.
+release-tag:
+	@if [ -z "$(VERSION)" ]; then echo "usage: make release-tag VERSION=0.1.0"; exit 1; fi
+	@echo "  →  reminder: bump Cargo.toml [workspace.package].version to $(VERSION)"
+	@echo "  →  reminder: bump $(NODE_DIR)/package.json .version and .optionalDependencies"
+	@echo "  →  then: git tag v$(VERSION) && git push origin v$(VERSION)"
 
 # ---------- toolchain setup ----------
 # Verify zig + cargo-zigbuild are available on PATH.

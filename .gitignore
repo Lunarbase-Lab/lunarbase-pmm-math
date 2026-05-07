@@ -22,5 +22,10 @@ math/rust-node/lunarbase-pmm-math-node/index.js
 .vscode/
 *.swp
 
+# Local secrets (publish tokens etc.) — committed template lives in .env.example.
+.env
+.env.local
+.env.*.local
+
 # OS
 .DS_Store
