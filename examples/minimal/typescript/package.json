@@ -3,17 +3,16 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "description": "Minimal example pulling @lunarbase-lab/pmm-math directly from npm.",
   "scripts": {
-    "build:addon": "npm --prefix ../../../math/rust-node/lunarbase-pmm-math-node install --no-save && npm --prefix ../../../math/rust-node/lunarbase-pmm-math-node run build",
-    "prerun": "npm run build:addon",
     "run": "tsx index.ts"
   },
   "dependencies": {
-    "lunarbase-pmm-math-node": "file:../../../math/rust-node/lunarbase-pmm-math-node"
+    "@lunarbase-lab/pmm-math": "^0.1.0"
   },
   "devDependencies": {
+    "@types/node": "^20.0.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.5.0",
-    "@types/node": "^20.0.0"
+    "typescript": "^5.5.0"
   }
 }

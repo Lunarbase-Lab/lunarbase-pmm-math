@@ -17,14 +17,14 @@ is downloaded.
 
 ### Supported platforms
 
-| OS    | Architecture | Sub-package                          |
-| ----- | ------------ | ------------------------------------ |
-| macOS | arm64        | `@lunarbase-lab/pmm-math-darwin-arm64`   |
-| Linux | x64 (glibc)  | `@lunarbase-lab/pmm-math-linux-x64-gnu`  |
+| OS    | Architecture | Sub-package                                |
+| ----- | ------------ | ------------------------------------------ |
+| macOS | arm64        | `@lunarbase-lab/pmm-math-darwin-arm64`     |
+| Linux | x64 (glibc)  | `@lunarbase-lab/pmm-math-linux-x64-gnu`    |
+| Linux | arm64 (glibc)| `@lunarbase-lab/pmm-math-linux-arm64-gnu`  |
 
-Other targets (`linux-arm64-gnu`, `linux-x64-musl`, `darwin-x64`,
-`win32-x64-msvc`) are not currently shipped — open an issue if you need
-one.
+Other targets (`linux-x64-musl`, `darwin-x64`, `win32-x64-msvc`) are not
+currently shipped — open an issue if you need one.
 
 ## Usage
 

@@ -61,8 +61,13 @@ jobs:
         include:
           - host: macos-14            # macOS-arm64 native runner
             target: aarch64-apple-darwin
+            zig: false
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            zig: false
+          - host: ubuntu-latest       # cross-compile via zig (GitHub doesn't have arm64 Linux runners on free tier)
+            target: aarch64-unknown-linux-gnu
+            zig: true
     runs-on: ${{ matrix.host }}
     defaults:
       run:
@@ -87,8 +92,28 @@ jobs:
       - name: Install npm deps
         run: npm install --ignore-scripts
 
+      - name: Set up zig + cargo-zigbuild (cross-compile only)
+        if: matrix.zig == true
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        if: matrix.zig == true
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
       - name: Build .node binary
-        run: npx napi build --platform --release --target ${{ matrix.target }}
+        # napi-rs CLI auto-detects cargo-zigbuild and uses it when --zig is
+        # passed. For native targets (zig=false) we just call cargo directly.
+        run: |
+          if [ "${{ matrix.zig }}" = "true" ]; then
+            npx napi build --platform --release --target ${{ matrix.target }} --zig
+          else
+            npx napi build --platform --release --target ${{ matrix.target }}
+          fi
+        shell: bash
 
       - name: Rename auto-generated index.js → index.cjs
         run: mv -f index.js index.cjs
@@ -175,6 +200,7 @@ jobs:
         run: |
           mv artifacts/bindings-aarch64-apple-darwin/lunarbase-pmm-math.darwin-arm64.node npm/darwin-arm64/
           mv artifacts/bindings-x86_64-unknown-linux-gnu/lunarbase-pmm-math.linux-x64-gnu.node npm/linux-x64-gnu/
+          mv artifacts/bindings-aarch64-unknown-linux-gnu/lunarbase-pmm-math.linux-arm64-gnu.node npm/linux-arm64-gnu/
 
       - name: Show final layout (AFTER napi artifacts)
         run: |
