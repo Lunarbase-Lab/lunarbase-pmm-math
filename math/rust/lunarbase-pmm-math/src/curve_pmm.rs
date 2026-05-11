@@ -78,6 +78,91 @@ pub fn q12_to_plain_concentration_k(k_q12: u32) -> u32 {
     k_q12 >> 12
 }
 
+/// Convert a plain decimal price (e.g. `2500.0`) into a Q64.96 sqrt-price
+/// (`uint160`). Lossy beyond f64's 53-bit significand. Panics if `price` is
+/// negative, NaN, or infinite; saturates at `U256::MAX` on overflow.
+#[inline]
+pub fn price_to_sqrt_price_x96(price: f64) -> U256 {
+    assert!(
+        price.is_finite() && price >= 0.0,
+        "price must be finite and non-negative"
+    );
+    let scaled = price.sqrt() * 2f64.powi(96);
+    f64_floor_to_u256(scaled)
+}
+
+/// Convert a Q64.96 sqrt-price back to a plain decimal price (`(p/2^96)^2`).
+/// Lossy beyond f64's 53-bit significand.
+#[inline]
+pub fn sqrt_price_x96_to_price(p_x96: U256) -> f64 {
+    let f = u256_to_f64_lossy(p_x96);
+    let sqrt_p = f / 2f64.powi(96);
+    sqrt_p * sqrt_p
+}
+
+/// Convert a plain decimal price into a Q32.48 sqrt-price (`uint80`). Lossy
+/// beyond f64's 53-bit significand. Panics if `price` is negative, NaN, or
+/// infinite; saturates at `2^80 - 1` on overflow.
+#[inline]
+pub fn price_to_sqrt_price_x48(price: f64) -> u128 {
+    assert!(
+        price.is_finite() && price >= 0.0,
+        "price must be finite and non-negative"
+    );
+    let scaled = price.sqrt() * 2f64.powi(48);
+    if !scaled.is_finite() || scaled < 0.0 {
+        return 0;
+    }
+    const U80_MAX: u128 = (1u128 << 80) - 1;
+    if scaled >= U80_MAX as f64 {
+        return U80_MAX;
+    }
+    scaled as u128
+}
+
+/// Convert a Q32.48 sqrt-price (`uint80`) back to a plain decimal price.
+#[inline]
+pub fn sqrt_price_x48_to_price(p_x48: u128) -> f64 {
+    let sqrt_p = (p_x48 as f64) / 2f64.powi(48);
+    sqrt_p * sqrt_p
+}
+
+/// Decode a non-negative finite f64 into `floor(x)` as a U256. Returns
+/// `U256::ZERO` for `x < 1` (including NaN and ±inf, which callers should
+/// reject); saturates at `U256::MAX` on overflow.
+fn f64_floor_to_u256(x: f64) -> U256 {
+    if !x.is_finite() || x < 1.0 {
+        return U256::ZERO;
+    }
+    let bits = x.to_bits();
+    let exp = (((bits >> 52) & 0x7ff) as i32) - 1023;
+    let mantissa = (bits & ((1u64 << 52) - 1)) | (1u64 << 52);
+    if exp >= 52 {
+        let shift = (exp - 52) as u32;
+        if shift >= 256 - 53 {
+            return U256::MAX;
+        }
+        U256::from(mantissa).shl(shift)
+    } else {
+        U256::from(mantissa).shr((52 - exp) as u32)
+    }
+}
+
+/// Convert a U256 to f64 by keeping the top 53 bits of significand. Lossy
+/// for values above 2^53.
+fn u256_to_f64_lossy(v: U256) -> f64 {
+    if v.is_zero() {
+        return 0.0;
+    }
+    let bits = 256 - v.leading_zeros();
+    if bits <= 64 {
+        return v.as_limbs()[0] as f64;
+    }
+    let shift = (bits - 53) as u32;
+    let truncated = v.shr(shift);
+    (truncated.as_limbs()[0] as f64) * 2f64.powi(shift as i32)
+}
+
 /// Snapshot of pool state required to compute a quote.
 pub struct PoolParams {
     /// Sqrt-price in Q64.96 (uint160 on-chain). Only operator's `upd()`
@@ -358,5 +443,94 @@ pub fn quote_y_to_x(params: &PoolParams, dy: U256) -> QuoteResult {
         amount_out,
         sqrt_price_next: p_next,
         fee,
+    }
+}
+
+#[cfg(test)]
+mod price_conversion_tests {
+    use super::*;
+
+    #[test]
+    fn price_x96_round_trip_unit() {
+        let p_x96 = price_to_sqrt_price_x96(1.0);
+        assert_eq!(p_x96, U256::Q96);
+        let back = sqrt_price_x96_to_price(p_x96);
+        assert!((back - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn price_x96_round_trip_assorted() {
+        for &price in &[0.25_f64, 1.5, 2500.0, 1e-9, 1e9] {
+            let p_x96 = price_to_sqrt_price_x96(price);
+            let back = sqrt_price_x96_to_price(p_x96);
+            let rel_err = ((back - price) / price).abs();
+            assert!(
+                rel_err < 1e-14,
+                "price={price} back={back} rel_err={rel_err}"
+            );
+        }
+    }
+
+    #[test]
+    fn price_x48_round_trip_unit() {
+        let p_x48 = price_to_sqrt_price_x48(1.0);
+        assert_eq!(p_x48, 1u128 << 48);
+        let back = sqrt_price_x48_to_price(p_x48);
+        assert!((back - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
+    fn price_x48_round_trip_assorted() {
+        // Q48 = ~14.5 decimal digits — round-trip rel-err scales as 2/(p*2^48).
+        for &price in &[0.25_f64, 1.5, 2500.0, 1e-6, 1e6] {
+            let p_x48 = price_to_sqrt_price_x48(price);
+            let back = sqrt_price_x48_to_price(p_x48);
+            let rel_err = ((back - price) / price).abs();
+            assert!(
+                rel_err < 1e-10,
+                "price={price} back={back} rel_err={rel_err}"
+            );
+        }
+    }
+
+    #[test]
+    fn price_zero_maps_to_zero() {
+        assert_eq!(price_to_sqrt_price_x96(0.0), U256::ZERO);
+        assert_eq!(price_to_sqrt_price_x48(0.0), 0);
+        assert_eq!(sqrt_price_x96_to_price(U256::ZERO), 0.0);
+        assert_eq!(sqrt_price_x48_to_price(0), 0.0);
+    }
+
+    #[test]
+    fn x48_x96_lifts_preserve_price() {
+        let price = 1234.5;
+        let p_x48 = price_to_sqrt_price_x48(price);
+        let p_x96 = sqrt_price_x48_to_x96(p_x48);
+        // p_x96 should equal price_to_sqrt_price_x96(price) shifted-down by the
+        // 48 bits of dropped fraction — i.e. agree up to the X48 precision.
+        let back = sqrt_price_x96_to_price(p_x96);
+        let rel_err = ((back - price) / price).abs();
+        assert!(rel_err < 1e-12, "back={back} rel_err={rel_err}");
+    }
+
+    #[test]
+    fn price_x48_overflow_saturates() {
+        // 2^64 is well beyond any sensible price; sqrt(2^64)·2^48 = 2^80, the
+        // top of the uint80 range. Verify we saturate, not panic.
+        let huge = 2f64.powi(64);
+        let p_x48 = price_to_sqrt_price_x48(huge);
+        assert_eq!(p_x48, (1u128 << 80) - 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be finite")]
+    fn price_nan_panics() {
+        let _ = price_to_sqrt_price_x96(f64::NAN);
+    }
+
+    #[test]
+    #[should_panic(expected = "must be finite")]
+    fn price_negative_panics() {
+        let _ = price_to_sqrt_price_x48(-1.0);
     }
 }

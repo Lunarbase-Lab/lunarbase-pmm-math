@@ -1,6 +1,10 @@
 package lunarbasepmm
 
-import "github.com/holiman/uint256"
+import (
+	"math"
+
+	"github.com/holiman/uint256"
+)
 
 const fixedPoint96Resolution = 96
 
@@ -89,4 +93,94 @@ func PlainToQ12ConcentrationK(k uint32) uint32 {
 // fractional part). `Q12ToPlainConcentrationK(409_600) == 100`.
 func Q12ToPlainConcentrationK(kQ12 uint32) uint32 {
 	return kQ12 >> 12
+}
+
+// PriceToSqrtPriceX96 converts a plain decimal price (e.g. 2500.0) into a
+// Q64.96 sqrt-price (uint160). Lossy beyond float64's 53-bit significand.
+// Panics if price is negative, NaN, or +/-Inf. Saturates at 2^256-1 on
+// overflow.
+func PriceToSqrtPriceX96(price float64) *uint256.Int {
+	if math.IsNaN(price) || math.IsInf(price, 0) || price < 0 {
+		panic("price must be finite and non-negative")
+	}
+	scaled := math.Sqrt(price) * math.Pow(2, 96)
+	return f64FloorToU256(scaled)
+}
+
+// SqrtPriceX96ToPrice converts a Q64.96 sqrt-price back to a plain decimal
+// price ((p/2^96)^2). Lossy beyond float64's 53-bit significand. Pass nil
+// through as 0.
+func SqrtPriceX96ToPrice(pX96 *uint256.Int) float64 {
+	if pX96 == nil {
+		return 0
+	}
+	sqrtP := u256ToF64Lossy(pX96) / math.Pow(2, 96)
+	return sqrtP * sqrtP
+}
+
+// PriceToSqrtPriceX48 converts a plain decimal price into a Q32.48 sqrt-price
+// (uint80) as *uint256.Int. Lossy beyond float64's 53-bit significand. Panics
+// on NaN/Inf/negative; saturates at 2^80-1 on overflow.
+func PriceToSqrtPriceX48(price float64) *uint256.Int {
+	if math.IsNaN(price) || math.IsInf(price, 0) || price < 0 {
+		panic("price must be finite and non-negative")
+	}
+	scaled := math.Sqrt(price) * math.Pow(2, 48)
+	u80Max := new(uint256.Int).Sub(new(uint256.Int).Lsh(one, 80), one)
+	if !(scaled >= 0) || math.IsInf(scaled, 0) {
+		return new(uint256.Int)
+	}
+	u80MaxF := math.Ldexp(1, 80)
+	if scaled >= u80MaxF {
+		return u80Max
+	}
+	return new(uint256.Int).SetUint64(uint64(scaled))
+}
+
+// SqrtPriceX48ToPrice converts a Q32.48 sqrt-price (uint80) back to a plain
+// decimal price. Pass nil through as 0.
+func SqrtPriceX48ToPrice(pX48 *uint256.Int) float64 {
+	if pX48 == nil {
+		return 0
+	}
+	sqrtP := u256ToF64Lossy(pX48) / math.Pow(2, 48)
+	return sqrtP * sqrtP
+}
+
+// f64FloorToU256 decodes a finite, non-negative float64 to floor(x) as a
+// uint256.Int. Returns zero for x < 1 (and for NaN / -Inf, which callers
+// should reject). Saturates at 2^256-1 on overflow.
+func f64FloorToU256(x float64) *uint256.Int {
+	if math.IsNaN(x) || math.IsInf(x, 0) || x < 1 {
+		return new(uint256.Int)
+	}
+	bits := math.Float64bits(x)
+	exp := int((bits>>52)&0x7ff) - 1023
+	mantissa := (bits & ((1 << 52) - 1)) | (1 << 52)
+	out := new(uint256.Int).SetUint64(mantissa)
+	if exp >= 52 {
+		shift := uint(exp - 52)
+		if shift >= 256-53 {
+			max := new(uint256.Int)
+			max.Not(max)
+			return max
+		}
+		return out.Lsh(out, shift)
+	}
+	return out.Rsh(out, uint(52-exp))
+}
+
+// u256ToF64Lossy converts a uint256.Int to float64 by keeping the top ~53
+// bits of significand. Lossy for values above 2^53.
+func u256ToF64Lossy(v *uint256.Int) float64 {
+	if v.IsZero() {
+		return 0
+	}
+	bitLen := v.BitLen()
+	if bitLen <= 64 {
+		return float64(v.Uint64())
+	}
+	shift := uint(bitLen - 53)
+	truncated := new(uint256.Int).Rsh(v, shift)
+	return float64(truncated.Uint64()) * math.Ldexp(1, int(shift))
 }

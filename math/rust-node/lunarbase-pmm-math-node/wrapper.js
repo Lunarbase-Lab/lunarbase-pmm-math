@@ -11,3 +11,7 @@ export const sqrtPriceX48ToX96 = binding.sqrtPriceX48ToX96;
 export const sqrtPriceX96ToX48 = binding.sqrtPriceX96ToX48;
 export const plainToQ12ConcentrationK = binding.plainToQ12ConcentrationK;
 export const q12ToPlainConcentrationK = binding.q12ToPlainConcentrationK;
+export const priceToSqrtPriceX96 = binding.priceToSqrtPriceX96;
+export const sqrtPriceX96ToPrice = binding.sqrtPriceX96ToPrice;
+export const priceToSqrtPriceX48 = binding.priceToSqrtPriceX48;
+export const sqrtPriceX48ToPrice = binding.sqrtPriceX48ToPrice;

@@ -54,3 +54,26 @@ export declare function plainToQ12ConcentrationK(k: number): number
  * (truncated). `q12ToPlainConcentrationK(409_600) === 100`.
  */
 export declare function q12ToPlainConcentrationK(kQ12: number): number
+/**
+ * Convert a plain decimal price (e.g. `2500.0`) into a Q64.96 sqrt-price
+ * (uint160). Lossy beyond JS `number`'s 53-bit significand; result is a
+ * decimal string. Throws on NaN/Infinity/negative price.
+ */
+export declare function priceToSqrtPriceX96(price: number): string
+/**
+ * Convert a Q64.96 sqrt-price back to a plain decimal price (`(p/2^96)^2`).
+ * Pass decimal or 0x-hex string; result is a JS `number`, lossy beyond
+ * 53-bit significand.
+ */
+export declare function sqrtPriceX96ToPrice(pX96: string): number
+/**
+ * Convert a plain decimal price into a Q32.48 sqrt-price (uint80) as a
+ * decimal string. Throws on NaN/Infinity/negative price. Saturates at
+ * `2^80 - 1` on overflow.
+ */
+export declare function priceToSqrtPriceX48(price: number): string
+/**
+ * Convert a Q32.48 sqrt-price (uint80) back to a plain decimal price. Pass
+ * decimal or 0x-hex string.
+ */
+export declare function sqrtPriceX48ToPrice(pX48: string): number

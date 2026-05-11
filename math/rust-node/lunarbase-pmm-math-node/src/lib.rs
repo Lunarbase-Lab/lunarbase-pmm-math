@@ -228,3 +228,51 @@ pub fn plain_to_q12_concentration_k_napi(k: u32) -> u32 {
 pub fn q12_to_plain_concentration_k_napi(k_q12: u32) -> u32 {
     curve_pmm::q12_to_plain_concentration_k(k_q12)
 }
+
+/// Convert a plain decimal price (e.g. `2500.0`) into a Q64.96 sqrt-price
+/// (uint160). Lossy beyond JS `number`'s 53-bit significand; result is a
+/// decimal string. Throws on NaN/Infinity/negative price.
+#[napi(js_name = "priceToSqrtPriceX96")]
+pub fn price_to_sqrt_price_x96_napi(price: f64) -> Result<String> {
+    if !price.is_finite() || price < 0.0 {
+        return Err(Error::from_reason(format!(
+            "price must be finite and non-negative: {price}"
+        )));
+    }
+    Ok(u256_to_string(curve_pmm::price_to_sqrt_price_x96(price)))
+}
+
+/// Convert a Q64.96 sqrt-price back to a plain decimal price (`(p/2^96)^2`).
+/// Pass decimal or 0x-hex string; result is a JS `number`, lossy beyond
+/// 53-bit significand.
+#[napi(js_name = "sqrtPriceX96ToPrice")]
+pub fn sqrt_price_x96_to_price_napi(p_x96: String) -> Result<f64> {
+    let v = parse_u160_field(&p_x96)?;
+    Ok(curve_pmm::sqrt_price_x96_to_price(v))
+}
+
+/// Convert a plain decimal price into a Q32.48 sqrt-price (uint80) as a
+/// decimal string. Throws on NaN/Infinity/negative price. Saturates at
+/// `2^80 - 1` on overflow.
+#[napi(js_name = "priceToSqrtPriceX48")]
+pub fn price_to_sqrt_price_x48_napi(price: f64) -> Result<String> {
+    if !price.is_finite() || price < 0.0 {
+        return Err(Error::from_reason(format!(
+            "price must be finite and non-negative: {price}"
+        )));
+    }
+    Ok(curve_pmm::price_to_sqrt_price_x48(price).to_string())
+}
+
+/// Convert a Q32.48 sqrt-price (uint80) back to a plain decimal price. Pass
+/// decimal or 0x-hex string.
+#[napi(js_name = "sqrtPriceX48ToPrice")]
+pub fn sqrt_price_x48_to_price_napi(p_x48: String) -> Result<f64> {
+    let v = parse_u256(&p_x48)?;
+    if !v.fits_u80() {
+        return Err(Error::from_reason(format!(
+            "value too large for uint80: {p_x48}"
+        )));
+    }
+    Ok(curve_pmm::sqrt_price_x48_to_price(v.as_u128()))
+}
