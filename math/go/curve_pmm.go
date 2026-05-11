@@ -1,63 +1,62 @@
 // Package lunarbasepmm is a pure-Go port of the lunarbase-pmm-math Rust crate.
 // It implements quoteXToY / quoteYToX exactly matching the on-chain `SwapLib`
-// reference on the `update/asymetric-fees` branch. No external dependencies
-// beyond github.com/holiman/uint256.
+// reference on the `fix/incident` branch (single-price Q64.96 design).
+// No external dependencies beyond github.com/holiman/uint256.
 package lunarbasepmm
 
 import "github.com/holiman/uint256"
 
-// PoolParams is the input snapshot needed to quote a swap on the
-// asymmetric-fees redesign.
+// PoolParams is the input snapshot needed to quote a swap.
 //
-// Widths follow the on-chain contract: SqrtPriceX48 / AnchorSqrtPriceX48 are
-// uint80 (Q48), FeeAskX24 / FeeBidX24 are uint24 (Q24, where Q24 represents
-// 100%), ReserveX / ReserveY are uint112, ConcentrationKQ12 is uint32 stored
-// as Q20.12 (effective K = ConcentrationKQ12 / 2^12).
+// Widths follow the on-chain contract: SqrtPriceX96 is uint160 (Q64.96),
+// FeeAskX24 / FeeBidX24 are uint24 (Q24, where Q24 represents 100%),
+// ReserveX / ReserveY are uint112, ConcentrationK is uint32 stored as
+// Q20.12 (effective K = ConcentrationK / 2^12).
+//
+// SqrtPriceX96 is the single canonical price (operator-set; swaps do not
+// mutate it). There is no separate live-vs-anchor split.
 type PoolParams struct {
-	SqrtPriceX48       *uint256.Int
-	AnchorSqrtPriceX48 *uint256.Int
-	FeeAskX24          uint32
-	FeeBidX24          uint32
-	ReserveX           *uint256.Int
-	ReserveY           *uint256.Int
-	ConcentrationKQ12  uint32
+	SqrtPriceX96   *uint256.Int
+	FeeAskX24      uint32
+	FeeBidX24      uint32
+	ReserveX       *uint256.Int
+	ReserveY       *uint256.Int
+	ConcentrationK uint32
 }
 
 // QuoteResult holds the output of QuoteXToY / QuoteYToX.
 //
-// AmountOut is net of Fee. SqrtPriceNext is the post-swap sqrt price. When
-// the swap is rejected (insufficient bound, zero liquidity, or input exceeds
-// max net Δ), AmountOut and Fee are zero and SqrtPriceNext equals the input
-// SqrtPriceX48. When the swap takes the linear-fallback path (cQ48 == 0),
-// SqrtPriceNext also equals SqrtPriceX48 (price is unchanged).
+// AmountOut is net of Fee. SqrtPriceNext is the hypothetical post-swap
+// sqrt price (informational — pool storage is unchanged by a swap on the
+// fix/incident design). When the swap is rejected, AmountOut and Fee are
+// zero and SqrtPriceNext equals the input SqrtPriceX96.
 type QuoteResult struct {
 	AmountOut     *uint256.Int
 	SqrtPriceNext *uint256.Int
 	Fee           *uint256.Int
 }
 
-// concentrationQ48 writes c = mulDiv(concentrationKQ12, r², Q12) into dst,
-// where r is normalised by anchor-price wealth. Saturates at Q48 (100%).
+// concentrationQ48 writes c = mulDiv(concentrationK, r², Q12) into dst,
+// where r is normalised by sqrtPriceX96 wealth. Saturates at Q48 (100%).
 //
-// Returns dst zeroed when amountIn, k, or anchorPrice is zero — that triggers
-// the linear-fallback path in the callers.
+// Returns dst zeroed when amountIn, k, or sqrtPriceX96 is zero — that
+// triggers the linear-fallback path in the callers.
 func concentrationQ48(
-	dst, anchorPrice *uint256.Int,
+	dst, sqrtPriceX96 *uint256.Int,
 	amountIn *uint256.Int,
 	reserveX, reserveY *uint256.Int,
 	kQ12 uint32,
 	xToY bool,
 ) *uint256.Int {
-	if amountIn.IsZero() || kQ12 == 0 || anchorPrice.IsZero() {
+	if amountIn.IsZero() || kQ12 == 0 || sqrtPriceX96.IsZero() {
 		dst.Clear()
 		return dst
 	}
 
-	var priceQ96 uint256.Int
-	priceQ96.Mul(anchorPrice, anchorPrice)
-
-	var xWealthInY, totalWealthInY uint256.Int
-	mulDivDown(&xWealthInY, reserveX, &priceQ96, q96)
+	// xWealthInY = mulDiv(mulDiv(reserveX, sqrtPX96, Q96), sqrtPX96, Q96)
+	var xWealthInY, totalWealthInY, scratch uint256.Int
+	mulDivDown(&scratch, reserveX, sqrtPriceX96, q96)
+	mulDivDown(&xWealthInY, &scratch, sqrtPriceX96, q96)
 	totalWealthInY.Add(&xWealthInY, reserveY)
 	if totalWealthInY.IsZero() {
 		dst.Clear()
@@ -66,7 +65,8 @@ func concentrationQ48(
 
 	var amountInWealth uint256.Int
 	if xToY {
-		mulDivDown(&amountInWealth, amountIn, &priceQ96, q96)
+		mulDivDown(&scratch, amountIn, sqrtPriceX96, q96)
+		mulDivDown(&amountInWealth, &scratch, sqrtPriceX96, q96)
 	} else {
 		amountInWealth.Set(amountIn)
 	}
@@ -93,40 +93,40 @@ func concentrationQ48(
 	return dst
 }
 
-// lowerBound writes pX48 * sqrt(1 - C) (Q48) into dst.
-func lowerBound(dst, pX48 *uint256.Int, cQ48 uint64) *uint256.Int {
+// lowerBound writes sqrtPriceX96 * sqrt(1 - C) (Q64.96) into dst.
+func lowerBound(dst, sqrtPriceX96 *uint256.Int, cQ48 uint64) *uint256.Int {
 	var oneMinusC, sqrtOneMinusC uint256.Int
 	oneMinusC.Sub(q48, oneMinusC.SetUint64(cQ48))
 	isqrt(&sqrtOneMinusC, &oneMinusC)
-	return mulDivDown(dst, pX48, &sqrtOneMinusC, q24)
+	return mulDivDown(dst, sqrtPriceX96, &sqrtOneMinusC, q24)
 }
 
-// upperBound writes pX48 / sqrt(1 - C) (Q48) into dst.
-func upperBound(dst, pX48 *uint256.Int, cQ48 uint64) *uint256.Int {
+// upperBound writes sqrtPriceX96 / sqrt(1 - C) (Q64.96) into dst.
+func upperBound(dst, sqrtPriceX96 *uint256.Int, cQ48 uint64) *uint256.Int {
 	var oneMinusC, sqrtOneMinusC uint256.Int
 	oneMinusC.Sub(q48, oneMinusC.SetUint64(cQ48))
 	isqrt(&sqrtOneMinusC, &oneMinusC)
-	return mulDivDown(dst, pX48, q24, &sqrtOneMinusC)
+	return mulDivDown(dst, sqrtPriceX96, q24, &sqrtOneMinusC)
 }
 
-// liquidityY writes reserveY * Q48 / (pX48 - pBid) into dst.
-func liquidityY(dst, pX48, pBid, reserveY *uint256.Int) *uint256.Int {
+// liquidityY writes reserveY * Q96 / (sqrtPriceX96 - pBid) into dst.
+func liquidityY(dst, sqrtPriceX96, pBid, reserveY *uint256.Int) *uint256.Int {
 	var denom uint256.Int
-	denom.Sub(pX48, pBid)
-	return mulDivDown(dst, reserveY, q48, &denom)
+	denom.Sub(sqrtPriceX96, pBid)
+	return mulDivDown(dst, reserveY, q96, &denom)
 }
 
-// liquidityX writes reserveX * (pX48 * pAsk) / (Q48 * (pAsk - pX48)) into dst.
-func liquidityX(dst, pX48, pAsk, reserveX *uint256.Int) *uint256.Int {
-	var num, denom uint256.Int
-	num.Mul(pX48, pAsk)
-	denom.Sub(pAsk, pX48)
-	denom.Mul(q48, &denom)
-	return mulDivDown(dst, reserveX, &num, &denom)
+// liquidityX writes reserveX * (mulDiv(sqrtPriceX96, pAsk, Q96)) / (pAsk - sqrtPriceX96) into dst.
+func liquidityX(dst, sqrtPriceX96, pAsk, reserveX *uint256.Int) *uint256.Int {
+	var priceProduct, denom uint256.Int
+	mulDivDown(&priceProduct, sqrtPriceX96, pAsk, q96)
+	denom.Sub(pAsk, sqrtPriceX96)
+	return mulDivDown(dst, reserveX, &priceProduct, &denom)
 }
 
-// QuoteXToY is an exact port of `SwapLib._quoteXToY`. Allocates a fresh
-// `QuoteResult` per call. For tight loops use [QuoteXToYInto].
+// QuoteXToY is an exact port of `SwapLib._quoteXToY` on the fix/incident
+// branch. Allocates a fresh `QuoteResult` per call. For tight loops use
+// [QuoteXToYInto].
 func QuoteXToY(params *PoolParams, dx *uint256.Int) *QuoteResult {
 	out := &QuoteResult{
 		AmountOut:     new(uint256.Int),
@@ -162,8 +162,8 @@ func QuoteXToYInto(out *QuoteResult, params *PoolParams, dx *uint256.Int) *Quote
 		feeQ24    uint256.Int
 	)
 
-	concentrationQ48(&cQ48, params.AnchorSqrtPriceX48, dx,
-		params.ReserveX, params.ReserveY, params.ConcentrationKQ12, true)
+	concentrationQ48(&cQ48, params.SqrtPriceX96, dx,
+		params.ReserveX, params.ReserveY, params.ConcentrationK, true)
 	if cQ48.IsZero() {
 		linearXToY(out, params, dx)
 		return out
@@ -172,19 +172,19 @@ func QuoteXToYInto(out *QuoteResult, params *PoolParams, dx *uint256.Int) *Quote
 		return writeRejected(out, params)
 	}
 
-	lowerBound(&pBid, params.AnchorSqrtPriceX48, cQ48.Uint64())
-	if !params.SqrtPriceX48.Gt(&pBid) {
+	lowerBound(&pBid, params.SqrtPriceX96, cQ48.Uint64())
+	if !params.SqrtPriceX96.Gt(&pBid) {
 		return writeRejected(out, params)
 	}
-	liquidityY(&liquidity, params.SqrtPriceX48, &pBid, params.ReserveY)
+	liquidityY(&liquidity, params.SqrtPriceX96, &pBid, params.ReserveY)
 
-	getAmountXDelta(&maxNetDx, &pBid, params.SqrtPriceX48, &liquidity, false)
+	getAmountXDelta(&maxNetDx, &pBid, params.SqrtPriceX96, &liquidity, false)
 	if dx.Gt(&maxNetDx) {
 		return writeRejected(out, params)
 	}
 
-	getNextSqrtPriceFromAmountXRoundingUp(&pNext, params.SqrtPriceX48, &liquidity, dx)
-	getAmountYDelta(&dy, params.SqrtPriceX48, &pNext, &liquidity, false)
+	getNextSqrtPriceFromAmountXRoundingUp(&pNext, params.SqrtPriceX96, &liquidity, dx)
+	getAmountYDelta(&dy, params.SqrtPriceX96, &pNext, &liquidity, false)
 
 	feeQ24.SetUint64(uint64(params.FeeBidX24))
 	mulDivDown(out.Fee, &dy, &feeQ24, q24)
@@ -205,8 +205,8 @@ func QuoteYToXInto(out *QuoteResult, params *PoolParams, dy *uint256.Int) *Quote
 		feeQ24    uint256.Int
 	)
 
-	concentrationQ48(&cQ48, params.AnchorSqrtPriceX48, dy,
-		params.ReserveX, params.ReserveY, params.ConcentrationKQ12, false)
+	concentrationQ48(&cQ48, params.SqrtPriceX96, dy,
+		params.ReserveX, params.ReserveY, params.ConcentrationK, false)
 	if cQ48.IsZero() {
 		linearYToX(out, params, dy)
 		return out
@@ -215,19 +215,19 @@ func QuoteYToXInto(out *QuoteResult, params *PoolParams, dy *uint256.Int) *Quote
 		return writeRejected(out, params)
 	}
 
-	upperBound(&pAsk, params.AnchorSqrtPriceX48, cQ48.Uint64())
-	if !params.SqrtPriceX48.Lt(&pAsk) {
+	upperBound(&pAsk, params.SqrtPriceX96, cQ48.Uint64())
+	if !params.SqrtPriceX96.Lt(&pAsk) {
 		return writeRejected(out, params)
 	}
-	liquidityX(&liquidity, params.SqrtPriceX48, &pAsk, params.ReserveX)
+	liquidityX(&liquidity, params.SqrtPriceX96, &pAsk, params.ReserveX)
 
-	getAmountYDelta(&maxNetDy, params.SqrtPriceX48, &pAsk, &liquidity, false)
+	getAmountYDelta(&maxNetDy, params.SqrtPriceX96, &pAsk, &liquidity, false)
 	if dy.Gt(&maxNetDy) {
 		return writeRejected(out, params)
 	}
 
-	getNextSqrtPriceFromAmountYRoundingDown(&pNext, params.SqrtPriceX48, &liquidity, dy)
-	getAmountXDelta(&dxOut, params.SqrtPriceX48, &pNext, &liquidity, false)
+	getNextSqrtPriceFromAmountYRoundingDown(&pNext, params.SqrtPriceX96, &liquidity, dy)
+	getAmountXDelta(&dxOut, params.SqrtPriceX96, &pNext, &liquidity, false)
 
 	feeQ24.SetUint64(uint64(params.FeeAskX24))
 	mulDivDown(out.Fee, &dxOut, &feeQ24, q24)
@@ -236,14 +236,13 @@ func QuoteYToXInto(out *QuoteResult, params *PoolParams, dy *uint256.Int) *Quote
 	return out
 }
 
-// linearXToY implements the cQ48 == 0 fallback for X → Y: dy = mulDiv(dx,
-// anchor², Q96), fee on dy, pNext = pX48. Reserve check on dy is performed
-// before fee, mirroring Solidity ordering.
+// linearXToY implements the cQ48 == 0 fallback for X → Y:
+// dy = mulDiv(mulDiv(dx, sqrtPriceX96, Q96), sqrtPriceX96, Q96),
+// fee on dy, pNext = sqrtPriceX96.
 func linearXToY(out *QuoteResult, params *PoolParams, dx *uint256.Int) {
-	var priceQ96, dyGross, feeQ24 uint256.Int
-	priceQ96.Mul(params.AnchorSqrtPriceX48, params.AnchorSqrtPriceX48)
-
-	mulDivDown(&dyGross, dx, &priceQ96, q96)
+	var dyGross, scratch, feeQ24 uint256.Int
+	mulDivDown(&scratch, dx, params.SqrtPriceX96, q96)
+	mulDivDown(&dyGross, &scratch, params.SqrtPriceX96, q96)
 	if dyGross.IsZero() || dyGross.Gt(params.ReserveY) {
 		writeRejected(out, params)
 		return
@@ -252,20 +251,21 @@ func linearXToY(out *QuoteResult, params *PoolParams, dx *uint256.Int) {
 	feeQ24.SetUint64(uint64(params.FeeBidX24))
 	mulDivDown(out.Fee, &dyGross, &feeQ24, q24)
 	out.AmountOut.Sub(&dyGross, out.Fee)
-	out.SqrtPriceNext.Set(params.SqrtPriceX48)
+	out.SqrtPriceNext.Set(params.SqrtPriceX96)
 }
 
-// linearYToX is the cQ48 == 0 fallback for Y → X: dx = mulDiv(dy, Q96,
-// anchor²), fee on dx, pNext = pX48.
+// linearYToX is the cQ48 == 0 fallback for Y → X:
+// dx = mulDiv(mulDiv(dy, Q96, sqrtPriceX96), Q96, sqrtPriceX96),
+// fee on dx, pNext = sqrtPriceX96.
 func linearYToX(out *QuoteResult, params *PoolParams, dy *uint256.Int) {
-	var priceQ96, dxGross, feeQ24 uint256.Int
-	priceQ96.Mul(params.AnchorSqrtPriceX48, params.AnchorSqrtPriceX48)
-	if priceQ96.IsZero() {
+	if params.SqrtPriceX96.IsZero() {
 		writeRejected(out, params)
 		return
 	}
 
-	mulDivDown(&dxGross, dy, q96, &priceQ96)
+	var dxGross, scratch, feeQ24 uint256.Int
+	mulDivDown(&scratch, dy, q96, params.SqrtPriceX96)
+	mulDivDown(&dxGross, &scratch, q96, params.SqrtPriceX96)
 	if dxGross.IsZero() || dxGross.Gt(params.ReserveX) {
 		writeRejected(out, params)
 		return
@@ -274,7 +274,7 @@ func linearYToX(out *QuoteResult, params *PoolParams, dy *uint256.Int) {
 	feeQ24.SetUint64(uint64(params.FeeAskX24))
 	mulDivDown(out.Fee, &dxGross, &feeQ24, q24)
 	out.AmountOut.Sub(&dxGross, out.Fee)
-	out.SqrtPriceNext.Set(params.SqrtPriceX48)
+	out.SqrtPriceNext.Set(params.SqrtPriceX96)
 }
 
 // writeRejected fills out with a zero-output result preserving the input
@@ -282,6 +282,6 @@ func linearYToX(out *QuoteResult, params *PoolParams, dy *uint256.Int) {
 func writeRejected(out *QuoteResult, params *PoolParams) *QuoteResult {
 	out.AmountOut.Clear()
 	out.Fee.Clear()
-	out.SqrtPriceNext.Set(params.SqrtPriceX48)
+	out.SqrtPriceNext.Set(params.SqrtPriceX96)
 	return out
 }

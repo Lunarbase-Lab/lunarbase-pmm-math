@@ -8,16 +8,15 @@
 //! # Quick start
 //!
 //! ```
-//! use lunarbase_pmm_math::{quote_x_to_y, PoolParams, U256};
+//! use lunarbase_pmm_math::{quote_x_to_y, PoolParams, U256, U256Ext};
 //!
 //! let params = PoolParams {
-//!     sqrt_price_x48: 1u128 << 48,
-//!     anchor_sqrt_price_x48: 1u128 << 48,
+//!     sqrt_price_x96: U256::Q96, // price = 1.0
 //!     fee_ask_x24: 0,
 //!     fee_bid_x24: (1u32 << 24) / 1000, // 0.10% bid fee
 //!     reserve_x: 1_000_000,
 //!     reserve_y: 1_000_000,
-//!     concentration_k_q12: 5_000,
+//!     concentration_k: 5_000,
 //! };
 //! let result = quote_x_to_y(&params, U256::from(1_000u64));
 //! let _ = result.amount_out;
@@ -32,5 +31,8 @@ mod fuzz_tests;
 #[cfg(test)]
 mod tests;
 
-pub use curve_pmm::{quote_x_to_y, quote_y_to_x, PoolParams, QuoteResult};
+pub use curve_pmm::{
+    quote_x_to_y, quote_y_to_x, sqrt_price_x48_to_x96, sqrt_price_x96_to_x48, PoolParams,
+    QuoteResult,
+};
 pub use uint256::{U256Ext, U256};

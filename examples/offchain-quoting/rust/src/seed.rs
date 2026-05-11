@@ -1,6 +1,7 @@
 use alloy::primitives::Address;
 use alloy::providers::{Provider, ProviderBuilder};
 use eyre::{Context, Result};
+use lunarbase_pmm_math::U256 as PmmU256;
 use tracing::info;
 
 use crate::abi::Pool;
@@ -21,8 +22,10 @@ pub async fn seed_state(rpc_url: &str, pool: Address, cache: &mut Cache) -> Resu
     let delay: u64 = contract.blockDelay().call().await?._0.to();
     let paused = contract.paused().call().await?._0;
 
-    let anchor_price: u128 = state.anchorPrice.to();
-    let p_x48: u128 = state.pX48.to();
+    // anchorPrice is uint160 (Q64.96 sqrt-price). Convert via decimal string to
+    // PmmU256 so the cache stores it at full precision.
+    let anchor_price = PmmU256::from_str_radix(&state.anchorPrice.to_string(), 10)
+        .context("parse anchorPrice as U256")?;
     let fee_ask_x24: u32 = state.feeAskX24.to();
     let fee_bid_x24: u32 = state.feeBidX24.to();
     let latest_update_block: u64 = state.latestUpdateBlock.to();
@@ -31,8 +34,8 @@ pub async fn seed_state(rpc_url: &str, pool: Address, cache: &mut Cache) -> Resu
     cache
         .set_state(latest_update_block, anchor_price, fee_ask_x24, fee_bid_x24)
         .await?;
-    cache.set_sqrt_price(p_x48).await?;
-    cache.set_concentration_k_q12(k).await?;
+    cache.set_sqrt_price(anchor_price).await?;
+    cache.set_concentration_k(k).await?;
     cache.set_block_delay(delay).await?;
     cache.set_paused(paused).await?;
 
@@ -40,12 +43,11 @@ pub async fn seed_state(rpc_url: &str, pool: Address, cache: &mut Cache) -> Resu
         head_block,
         reserve_x,
         reserve_y,
-        anchor_price,
+        anchor_price = %anchor_price,
         fee_ask_x24,
         fee_bid_x24,
-        p_x48,
         latest_update_block,
-        concentration_k_q12 = k,
+        concentration_k = k,
         block_delay = delay,
         paused,
         "seeded pool state from RPC"

@@ -2,7 +2,8 @@ mod swap;
 
 use alloy::primitives::{keccak256, B256};
 use alloy::sol_types::SolEvent;
-use eyre::Result;
+use eyre::{Context, Result};
+use lunarbase_pmm_math::U256 as PmmU256;
 use tracing::{debug, info, warn};
 
 use crate::abi::Pool;
@@ -41,13 +42,18 @@ async fn handle_log(log: LogEvent, cache: &mut Cache) -> Result<()> {
 
     if topic0 == sig::<Pool::StateUpdated>() {
         let ev = decode::<Pool::StateUpdated>(&log)?;
-        let anchor: u128 = ev.anchorPrice.to();
+        // anchorPrice is uint160 (Q64.96 sqrt-price); marshal through the
+        // decimal-string representation to keep the full width.
+        let anchor = PmmU256::from_str_radix(&ev.anchorPrice.to_string(), 10)
+            .context("parse anchorPrice as U256")?;
         let fee_ask: u32 = ev.feeAskX24.to();
         let fee_bid: u32 = ev.feeBidX24.to();
         cache.set_state(block, anchor, fee_ask, fee_bid).await?;
+        // pX96 also takes the new value on upd() (only operator-driven path).
+        cache.set_sqrt_price(anchor).await?;
         info!(
             block,
-            anchor_price = anchor,
+            anchor_price = %anchor,
             fee_ask_x24 = fee_ask,
             fee_bid_x24 = fee_bid,
             "StateUpdated"
@@ -67,11 +73,8 @@ async fn handle_log(log: LogEvent, cache: &mut Cache) -> Result<()> {
         }
     } else if topic0 == sig::<Pool::ConcentrationKSet>() {
         let ev = decode::<Pool::ConcentrationKSet>(&log)?;
-        cache.set_concentration_k_q12(ev.concentrationK).await?;
-        info!(
-            concentration_k_q12 = ev.concentrationK,
-            "ConcentrationKSet"
-        );
+        cache.set_concentration_k(ev.concentrationK).await?;
+        info!(concentration_k = ev.concentrationK, "ConcentrationKSet");
     } else if topic0 == sig::<Pool::BlockDelaySet>() {
         let ev = decode::<Pool::BlockDelaySet>(&log)?;
         let d: u64 = ev.blockDelay.to();

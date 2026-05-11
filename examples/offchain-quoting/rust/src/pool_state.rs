@@ -3,15 +3,16 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default)]
 pub struct PoolState {
-    pub sqrt_price_x48: u128,
-    pub anchor_sqrt_price_x48: u128,
+    /// Single sqrt-price in Q64.96 (uint160 on-chain). Only operator's `upd()`
+    /// changes this — swaps do not mutate it.
+    pub sqrt_price_x96: U256,
     pub fee_ask_x24: u32,
     pub fee_bid_x24: u32,
     #[allow(dead_code)]
     pub latest_update_block: u64,
     pub reserve_x: u128,
     pub reserve_y: u128,
-    pub concentration_k_q12: u32,
+    pub concentration_k: u32,
     #[allow(dead_code)]
     pub block_delay: u64,
     #[allow(dead_code)]
@@ -21,13 +22,12 @@ pub struct PoolState {
 impl PoolState {
     pub fn to_params(&self) -> PoolParams {
         PoolParams {
-            sqrt_price_x48: self.sqrt_price_x48,
-            anchor_sqrt_price_x48: self.anchor_sqrt_price_x48,
+            sqrt_price_x96: self.sqrt_price_x96,
             fee_ask_x24: self.fee_ask_x24,
             fee_bid_x24: self.fee_bid_x24,
             reserve_x: self.reserve_x,
             reserve_y: self.reserve_y,
-            concentration_k_q12: self.concentration_k_q12,
+            concentration_k: self.concentration_k,
         }
     }
 
@@ -68,4 +68,8 @@ pub fn u256_to_u128_saturating(v: U256) -> u128 {
 
 pub fn parse_decimal_u128(s: &str) -> Option<u128> {
     s.trim().parse::<u128>().ok()
+}
+
+pub fn parse_decimal_u256(s: &str) -> Option<U256> {
+    U256::from_str_radix(s.trim(), 10).ok()
 }

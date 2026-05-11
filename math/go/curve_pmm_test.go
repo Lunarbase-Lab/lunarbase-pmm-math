@@ -28,28 +28,26 @@ func TestIsqrt(t *testing.T) {
 
 func TestConcentrationQ48_ZeroAmount(t *testing.T) {
 	var c uint256.Int
-	concentrationQ48(&c, uint256.NewInt(1<<48), new(uint256.Int),
+	concentrationQ48(&c, q96, new(uint256.Int),
 		uint256.NewInt(10000), uint256.NewInt(10000), 5000, true)
 	assert.True(t, c.IsZero())
 }
 
 func TestConcentrationQ48_ZeroK(t *testing.T) {
 	var c uint256.Int
-	concentrationQ48(&c, uint256.NewInt(1<<48), uint256.NewInt(1000),
+	concentrationQ48(&c, q96, uint256.NewInt(1000),
 		uint256.NewInt(10000), uint256.NewInt(10000), 0, true)
 	assert.True(t, c.IsZero())
 }
 
 func TestQuoteReturnsZeroWhenNoLiquidity(t *testing.T) {
-	p := uint256.NewInt(1 << 48)
 	params := &PoolParams{
-		SqrtPriceX48:       p,
-		AnchorSqrtPriceX48: p,
-		FeeAskX24:          0,
-		FeeBidX24:          0,
-		ReserveX:           new(uint256.Int),
-		ReserveY:           new(uint256.Int),
-		ConcentrationKQ12:  5000,
+		SqrtPriceX96:   q96, // Q96 = price 1.0
+		FeeAskX24:      0,
+		FeeBidX24:      0,
+		ReserveX:       new(uint256.Int),
+		ReserveY:       new(uint256.Int),
+		ConcentrationK: 5000,
 	}
 	result := QuoteXToY(params, uint256.NewInt(1000))
 	assert.True(t, result.AmountOut.IsZero())

@@ -9,7 +9,9 @@ use crate::cache::Cache;
 pub struct Quote {
     pub amount_out: U256,
     pub fee: U256,
-    pub sqrt_price_next: u128,
+    /// Q64.96 sqrt-price the swap would settle at. Informational on
+    /// fix/incident: actual on-chain pool sqrtPriceX96 is operator-only.
+    pub sqrt_price_next: U256,
     pub head_block: u64,
     pub latest_update_block: u64,
     pub block_age: u64,

@@ -99,14 +99,14 @@ fn parse_u128_field(s: &str) -> Result<u128> {
     Ok(v.as_u128())
 }
 
-fn parse_u80_field(s: &str) -> Result<u128> {
+fn parse_u160_field(s: &str) -> Result<U256> {
     let v = parse_u256(s)?;
-    if !v.fits_u80() {
+    if !v.fits_u160() {
         return Err(Error::from_reason(format!(
-            "value too large for uint80: {s}"
+            "value too large for uint160: {s}"
         )));
     }
-    Ok(v.as_u128())
+    Ok(v)
 }
 
 fn parse_u24_field(name: &str, value: u32) -> Result<u32> {
@@ -120,10 +120,9 @@ fn parse_u24_field(name: &str, value: u32) -> Result<u32> {
 
 #[napi(object)]
 pub struct QuoteParams {
-    /// sqrtPriceX48 as decimal or hex string
-    pub sqrt_price_x48: String,
-    /// anchor sqrtPriceX48 as decimal or hex string. Defaults to sqrtPriceX48 when omitted.
-    pub anchor_sqrt_price_x48: Option<String>,
+    /// sqrtPriceX96 (Q64.96, uint160) as decimal or hex string.
+    /// Single canonical price — operator-set, swaps do not move it.
+    pub sqrt_price_x96: String,
     /// fee charged on Y → X swaps in Q24 (uint24).
     pub fee_ask_x24: u32,
     /// fee charged on X → Y swaps in Q24 (uint24).
@@ -132,8 +131,8 @@ pub struct QuoteParams {
     pub reserve_x: String,
     /// reserve Y as decimal or hex string
     pub reserve_y: String,
-    /// concentration multiplier in Q20.12 (uint32). Effective K = concentration_k_q12 / 2^12.
-    pub concentration_k_q12: u32,
+    /// concentration multiplier in Q20.12 (uint32). Effective K = concentration_k / 2^12.
+    pub concentration_k: u32,
     /// input amount as decimal or hex string
     pub amount_in: String,
 }
@@ -149,11 +148,7 @@ pub struct QuoteResult {
 }
 
 fn to_pool_params(p: &QuoteParams) -> Result<(PoolParams, U256)> {
-    let sqrt_price = parse_u80_field(&p.sqrt_price_x48)?;
-    let anchor_sqrt_price = match &p.anchor_sqrt_price_x48 {
-        Some(anchor) => parse_u80_field(anchor)?,
-        None => sqrt_price,
-    };
+    let sqrt_price_x96 = parse_u160_field(&p.sqrt_price_x96)?;
     let fee_ask_x24 = parse_u24_field("fee_ask_x24", p.fee_ask_x24)?;
     let fee_bid_x24 = parse_u24_field("fee_bid_x24", p.fee_bid_x24)?;
     let reserve_x = parse_u128_field(&p.reserve_x)?;
@@ -162,13 +157,12 @@ fn to_pool_params(p: &QuoteParams) -> Result<(PoolParams, U256)> {
 
     Ok((
         PoolParams {
-            sqrt_price_x48: sqrt_price,
-            anchor_sqrt_price_x48: anchor_sqrt_price,
+            sqrt_price_x96,
             fee_ask_x24,
             fee_bid_x24,
             reserve_x,
             reserve_y,
-            concentration_k_q12: p.concentration_k_q12,
+            concentration_k: p.concentration_k,
         },
         amount_in,
     ))
@@ -177,7 +171,7 @@ fn to_pool_params(p: &QuoteParams) -> Result<(PoolParams, U256)> {
 fn from_internal_result(r: InternalQuoteResult) -> QuoteResult {
     QuoteResult {
         amount_out: u256_to_string(r.amount_out),
-        sqrt_price_next: r.sqrt_price_next.to_string(),
+        sqrt_price_next: u256_to_string(r.sqrt_price_next),
         fee: u256_to_string(r.fee),
     }
 }

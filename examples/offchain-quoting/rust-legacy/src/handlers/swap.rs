@@ -51,10 +51,10 @@ pub async fn apply(ev: &Pool::SwapExecuted, snap: &PoolState, cache: &mut Cache)
         direction,
         dx = %ev.dx,
         dy = %ev.dy,
-        sqrt_price_x48 = sqrt_price_next,
+        sqrt_price_x96 = %sqrt_price_next,
         reserve_x = new_x,
         reserve_y = new_y,
-        "swap applied; live price updated"
+        "swap applied; live price (informational) and reserves updated"
     );
     Ok(())
 }

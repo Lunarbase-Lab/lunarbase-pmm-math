@@ -2,15 +2,15 @@ package lunarbasepmm
 
 import "github.com/holiman/uint256"
 
-const fixedPoint48Resolution = 48
+const fixedPoint96Resolution = 96
 
 var (
-	one     = uint256.NewInt(1)
-	q12     = new(uint256.Int).Lsh(one, 12)
-	q24     = new(uint256.Int).Lsh(one, 24)
-	q48     = new(uint256.Int).Lsh(one, 48)
-	q96     = new(uint256.Int).Lsh(one, 96)
-	u2Pow80 = new(uint256.Int).Lsh(one, 80)
+	one      = uint256.NewInt(1)
+	q12      = new(uint256.Int).Lsh(one, 12)
+	q24      = new(uint256.Int).Lsh(one, 24)
+	q48      = new(uint256.Int).Lsh(one, 48)
+	q96      = new(uint256.Int).Lsh(one, 96)
+	u2Pow160 = new(uint256.Int).Lsh(one, 160)
 )
 
 // mulDivDown computes floor(x*y/denominator) into dst with a 512-bit
@@ -47,4 +47,28 @@ func ceilDiv(dst, a, b *uint256.Int) *uint256.Int {
 // isqrt computes floor(sqrt(x)) into dst.
 func isqrt(dst, x *uint256.Int) *uint256.Int {
 	return dst.Sqrt(x)
+}
+
+// SqrtPriceX48ToX96 lifts a Q32.48 sqrt-price (legacy pX48, uint80) into a
+// Q64.96 sqrt-price (pX96, uint160) by shifting left 48 bits. The result
+// represents the same numerical price (same value of (p/Q)^2). Pass nil
+// through unchanged for ergonomics.
+func SqrtPriceX48ToX96(pX48 *uint256.Int) *uint256.Int {
+	if pX48 == nil {
+		return nil
+	}
+	out := new(uint256.Int).Set(pX48)
+	return out.Lsh(out, 48)
+}
+
+// SqrtPriceX96ToX48 lowers a Q64.96 sqrt-price (pX96, uint160) into a Q32.48
+// sqrt-price (pX48, uint80) by right-shifting 48 bits, truncating the bottom
+// 48 bits of precision. Used for backward-compat with legacy serialised
+// state. Pass nil through unchanged.
+func SqrtPriceX96ToX48(pX96 *uint256.Int) *uint256.Int {
+	if pX96 == nil {
+		return nil
+	}
+	out := new(uint256.Int).Set(pX96)
+	return out.Rsh(out, 48)
 }

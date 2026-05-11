@@ -15,8 +15,8 @@ Redis, and computes quotes through [`lunarbase-pmm-math`](../../math/rust/lunarb
 
 | Path                           | Crate                                  | Targets                                                                                    |
 | ------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------ |
-| [`rust/`](rust/)               | `offchain-quoting-example-rust`        | the **current** Pool ABI (`uint80 pX48`, separate `anchorPrice()` view)                    |
-| [`rust-legacy/`](rust-legacy/) | `offchain-quoting-example-rust-legacy` | the **legacy** Pool ABI (`uint160 pX96`, no `anchorPrice()`); converts Q96 → Q48 at ingest |
+| [`rust/`](rust/)               | `offchain-quoting-example-rust`        | the **current** Pool ABI on `fix/incident` (`uint160 anchorPrice` Q96, single price)        |
+| [`rust-legacy/`](rust-legacy/) | `offchain-quoting-example-rust-legacy` | the **legacy** Pool ABI (`uint160 pX96`, no `anchorPrice()` view, single Q48 fee)           |
 
 Both crates are members of the workspace and share the same module layout.
 Pick whichever matches the contract version you are integrating against.
@@ -33,12 +33,13 @@ Pick whichever matches the contract version you are integrating against.
 3. **Apply contract events** to the cached pool state in Redis:
    - `Sync(reserveX, reserveY)` — atomically replaces cached reserves.
    - `SwapExecuted(recipient, xToY, dx, dy, fee)` — locally projects the swap
-     through `lunarbase_pmm_math::quote_x_to_y` / `quote_y_to_x`,
-     atomically updates `sqrt_price_x48` and increments reserves by the gross
-     deltas. Sanity-checks the local `fee` against the on-chain `fee`.
-   - `StateUpdated((anchor, fee))` — refreshes operator anchor and fee
-     (legacy variant additionally resets `sqrt_price_x48` to the new anchor,
-     mirroring the contract's single-slot semantics).
+     through `lunarbase_pmm_math::quote_x_to_y` / `quote_y_to_x` and updates
+     cached reserves by the gross deltas. Sanity-checks the local `fee`
+     against the on-chain `fee`. The local `sqrtPriceNext` is informational —
+     on `fix/incident` actual on-chain `sqrtPriceX96` is operator-only.
+   - `StateUpdated(anchorPrice, feeAskX24, feeBidX24)` — refreshes the
+     operator-published `sqrtPriceX96` (Q64.96) and per-direction fees. The
+     legacy variant additionally consolidates the single-fee path.
    - `ConcentrationKSet`, `BlockDelaySet`, `Paused`, `Unpaused` — cached.
 4. **Deduplicate** logs that the flashblocks node re-emits across pre-confirmation
    snapshots: the dedup key is `(blockNumber, transactionHash, logIndex)`,
@@ -85,9 +86,9 @@ You should see, in roughly this order:
 INFO starting offchain quoter pool=0x... rpc=... ws=... redis=...
 INFO seeded pool state from RPC head_block=... reserve_x=... reserve_y=... ...
 INFO opening flashblocks WS ws_url=...
-INFO StateUpdated  block=... anchor_px48=... fee_q48=...
+INFO StateUpdated  block=... anchor_price=<Q96> fee_ask_x24=... fee_bid_x24=...
 INFO Sync          block=... reserve_x=... reserve_y=...
-INFO swap applied; live price updated direction="X->Y" dx=... dy=... sqrt_price_x48=... reserve_x=... reserve_y=...
+INFO swap applied; ...  direction="X->Y" dx=... dy=... sqrt_price_x96=<Q96> reserve_x=... reserve_y=...
 ```
 
 ## Inspecting the cache
@@ -98,8 +99,8 @@ deployment so that your service code translates 1:1 to a partner-side worker:
 | Key                           | Type          | TTL  | Content                                           |
 | ----------------------------- | ------------- | ---- | ------------------------------------------------- |
 | `reserves:<pool>`             | string (JSON) | 10 s | `["<reserveX>", "<reserveY>"]`                    |
-| `updates:<pool>`              | string (JSON) | 6 s  | `{"block": N, "anchorPX48": "...", "fee": "..."}` |
-| `sqrtprice:<pool>`            | string        | 6 s  | decimal `sqrt_price_x48`                          |
+| `updates:<pool>`              | string (JSON) | 6 s  | `{"block": N, "anchorPrice": "<Q96>", "feeAskX24": N, "feeBidX24": N}` |
+| `sqrtprice:<pool>`            | string        | 6 s  | decimal `sqrt_price_x96` (Q64.96)                 |
 | `pmm:concentrationK:<pool>`   | string        | 60 s | decimal `uint32`                                  |
 | `pmm:blockDelay:<pool>`       | string        | 60 s | decimal `uint48`                                  |
 | `pmm:paused:<pool>`           | string        | 60 s | `0` / `1`                                         |
@@ -141,4 +142,4 @@ milliseconds in the example deployment.
 
 - Math crate: [`math/rust/lunarbase-pmm-math`](../../math/rust/lunarbase-pmm-math)
 - Public quoter API: `quote_x_to_y(params, dx)`, `quote_y_to_x(params, dy)`
-- Pool params struct: `PoolParams { sqrt_price_x48, anchor_sqrt_price_x48, fee_q48, reserve_x, reserve_y, concentration_k }`
+- Pool params struct: `PoolParams { sqrt_price_x96, fee_ask_x24, fee_bid_x24, reserve_x, reserve_y, concentration_k }`

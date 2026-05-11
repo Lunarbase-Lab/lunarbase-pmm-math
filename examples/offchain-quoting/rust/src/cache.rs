@@ -3,7 +3,10 @@ use eyre::{Context, Result};
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 
-use crate::pool_state::{parse_decimal_u128, PoolState, ReservesPayload, UpdatesPayload};
+use crate::pool_state::{
+    parse_decimal_u128, parse_decimal_u256, PoolState, ReservesPayload, UpdatesPayload,
+};
+use lunarbase_pmm_math::U256;
 
 const RESERVES_TTL: u64 = 10;
 const UPD_TTL: u64 = 6;
@@ -36,8 +39,8 @@ impl Cache {
     fn k_sqrt_price(&self) -> String {
         format!("sqrtprice:{}", self.pool_tag)
     }
-    fn k_concentration_k_q12(&self) -> String {
-        format!("pmm:concentrationKQ12:{}", self.pool_tag)
+    fn k_concentration_k(&self) -> String {
+        format!("pmm:concentrationK:{}", self.pool_tag)
     }
     fn k_block_delay(&self) -> String {
         format!("pmm:blockDelay:{}", self.pool_tag)
@@ -77,7 +80,7 @@ impl Cache {
     pub async fn set_state(
         &mut self,
         block: u64,
-        anchor_price: u128,
+        anchor_price: U256,
         fee_ask_x24: u32,
         fee_bid_x24: u32,
     ) -> Result<()> {
@@ -91,18 +94,18 @@ impl Cache {
         Ok(())
     }
 
-    pub async fn set_sqrt_price(&mut self, sqrt_price_x48: u128) -> Result<()> {
+    pub async fn set_sqrt_price(&mut self, sqrt_price_x96: U256) -> Result<()> {
         let _: () = self
             .conn
-            .set_ex(self.k_sqrt_price(), sqrt_price_x48.to_string(), SQRT_TTL)
+            .set_ex(self.k_sqrt_price(), sqrt_price_x96.to_string(), SQRT_TTL)
             .await?;
         Ok(())
     }
 
-    pub async fn set_concentration_k_q12(&mut self, k: u32) -> Result<()> {
+    pub async fn set_concentration_k(&mut self, k: u32) -> Result<()> {
         let _: () = self
             .conn
-            .set(self.k_concentration_k_q12(), k.to_string())
+            .set(self.k_concentration_k(), k.to_string())
             .await?;
         Ok(())
     }
@@ -127,7 +130,7 @@ impl Cache {
 
     pub async fn apply_swap(
         &mut self,
-        sqrt_price_x48: u128,
+        sqrt_price_x96: U256,
         reserve_x: u128,
         reserve_y: u128,
     ) -> Result<()> {
@@ -135,7 +138,7 @@ impl Cache {
             serde_json::to_string(&ReservesPayload::from_pair(reserve_x, reserve_y))?;
         let _: () = redis::pipe()
             .atomic()
-            .set_ex(self.k_sqrt_price(), sqrt_price_x48.to_string(), SQRT_TTL)
+            .set_ex(self.k_sqrt_price(), sqrt_price_x96.to_string(), SQRT_TTL)
             .set_ex(self.k_reserves(), reserves_payload, RESERVES_TTL)
             .query_async(&mut self.conn)
             .await?;
@@ -153,7 +156,7 @@ impl Cache {
             self.k_reserves(),
             self.k_updates(),
             self.k_sqrt_price(),
-            self.k_concentration_k_q12(),
+            self.k_concentration_k(),
             self.k_block_delay(),
             self.k_paused(),
         ];
@@ -161,7 +164,7 @@ impl Cache {
         let reserves = raw[0].as_ref();
         let updates = raw[1].as_ref();
         let sqrt_price = raw[2].as_ref();
-        let concentration_k_q12 = raw[3].as_ref();
+        let concentration_k = raw[3].as_ref();
         let block_delay = raw[4].as_ref();
         let paused = raw[5].as_ref();
 
@@ -174,27 +177,26 @@ impl Cache {
 
         let reserve_x = parse_decimal_u128(&r.0).unwrap_or(0);
         let reserve_y = parse_decimal_u128(&r.1).unwrap_or(0);
-        let anchor_price = parse_decimal_u128(&u.anchor_price).unwrap_or(0);
+        let anchor_price = parse_decimal_u256(&u.anchor_price).unwrap_or(U256::ZERO);
 
-        let sqrt_price_x48 = sqrt_price
-            .and_then(|s| parse_decimal_u128(s))
+        let sqrt_price_x96 = sqrt_price
+            .and_then(|s| parse_decimal_u256(s))
             .unwrap_or(anchor_price);
 
-        let concentration_k_q12 = concentration_k_q12
+        let concentration_k = concentration_k
             .and_then(|s| s.parse::<u32>().ok())
             .unwrap_or(0);
         let block_delay = block_delay.and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
         let paused = paused.is_some_and(|s| s == "1");
 
         Ok(Some(PoolState {
-            sqrt_price_x48,
-            anchor_sqrt_price_x48: anchor_price,
+            sqrt_price_x96,
             fee_ask_x24: u.fee_ask_x24,
             fee_bid_x24: u.fee_bid_x24,
             latest_update_block: u.block,
             reserve_x,
             reserve_y,
-            concentration_k_q12,
+            concentration_k,
             block_delay,
             paused,
         }))

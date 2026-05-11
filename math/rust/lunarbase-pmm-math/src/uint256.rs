@@ -16,6 +16,9 @@ pub trait U256Ext {
     /// `2^48` as a [`U256`] constant.
     const Q48: U256;
 
+    /// `2^96` as a [`U256`] constant.
+    const Q96: U256;
+
     /// `floor((a * b) / denominator)` with 512-bit intermediate.
     fn mul_div(a: U256, b: U256, denominator: U256) -> U256;
     /// `ceil((a * b) / denominator)` with 512-bit intermediate.
@@ -52,6 +55,12 @@ impl U256Ext for U256 {
         Uint::from_limbs(limbs)
     };
 
+    const Q96: U256 = {
+        let mut limbs = [0u64; 4];
+        limbs[1] = 1u64 << 32; // 2^96 = 2^64 × 2^32
+        Uint::from_limbs(limbs)
+    };
+
     #[inline(always)]
     fn from_u128(v: u128) -> U256 {
         U256::from(v)
@@ -74,7 +83,9 @@ impl U256Ext for U256 {
 
     #[inline(always)]
     fn fits_u160(self) -> bool {
-        self.fits_u128()
+        let limbs = self.as_limbs();
+        // 160 bits = limbs[0] + limbs[1] + lower 32 bits of limbs[2]
+        limbs[3] == 0 && (limbs[2] >> 32) == 0
     }
 
     #[inline(always)]

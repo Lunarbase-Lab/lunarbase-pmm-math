@@ -5,7 +5,7 @@ use tracing::info;
 
 use crate::abi::Pool;
 use crate::cache::Cache;
-use crate::pool_state::px96_to_px48;
+use crate::pool_state::px96_to_u256;
 
 pub async fn seed_state(rpc_url: &str, pool: Address, cache: &mut Cache) -> Result<()> {
     let url = rpc_url.parse().context("bad RPC_URL")?;
@@ -23,20 +23,20 @@ pub async fn seed_state(rpc_url: &str, pool: Address, cache: &mut Cache) -> Resu
     let paused = contract.paused().call().await?._0;
 
     let p_x96 = state.pX96;
-    let p_x48: u128 = px96_to_px48(p_x96);
+    let p_x96_u = px96_to_u256(p_x96);
     let fee_q48: u64 = state.fee.to();
     let latest_update_block: u64 = state.latestUpdateBlock.to();
 
     // Legacy contract has no separate `anchorPrice()` view: operator-published
     // sqrt-price IS the anchor on every StateUpdated, and it also resets the
     // current sqrt-price.
-    let anchor_px48 = p_x48;
+    let anchor_px96 = p_x96_u;
 
     cache.set_reserves(reserve_x, reserve_y).await?;
     cache
-        .set_state(latest_update_block, anchor_px48, fee_q48)
+        .set_state(latest_update_block, anchor_px96, fee_q48)
         .await?;
-    cache.set_sqrt_price(p_x48).await?;
+    cache.set_sqrt_price(p_x96_u).await?;
     cache.set_concentration_k(k).await?;
     cache.set_block_delay(delay).await?;
     cache.set_paused(paused).await?;
@@ -46,9 +46,8 @@ pub async fn seed_state(rpc_url: &str, pool: Address, cache: &mut Cache) -> Resu
         reserve_x,
         reserve_y,
         %p_x96,
-        anchor_px48,
+        anchor_px96 = %anchor_px96,
         fee_q48,
-        p_x48,
         latest_update_block,
         concentration_k = k,
         block_delay = delay,

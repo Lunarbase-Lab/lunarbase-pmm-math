@@ -20,7 +20,7 @@ func main() {
 		FeeBidX24:          (1 << 24) / 1_000, // 0.10%
 		ReserveX:           uint256.NewInt(1_000_000_000),
 		ReserveY:           uint256.NewInt(1_000_000_000),
-		ConcentrationKQ12:  5_000 << 12, // legacy K=5000 in Q20.12 encoding
+		ConcentrationK:  5_000 << 12, // legacy K=5000 in Q20.12 encoding
 	}
 
 	dx := uint256.NewInt(10_000)

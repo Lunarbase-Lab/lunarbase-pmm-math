@@ -3,7 +3,10 @@ use eyre::{Context, Result};
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 
-use crate::pool_state::{parse_decimal_u128, PoolState, ReservesPayload, UpdatesPayload};
+use crate::pool_state::{
+    parse_decimal_u128, parse_decimal_u256, PoolState, ReservesPayload, UpdatesPayload,
+};
+use lunarbase_pmm_math::U256;
 
 const RESERVES_TTL: u64 = 10;
 const UPD_TTL: u64 = 6;
@@ -74,20 +77,20 @@ impl Cache {
         Ok(())
     }
 
-    pub async fn set_state(&mut self, block: u64, anchor_px48: u128, fee_q48: u64) -> Result<()> {
+    pub async fn set_state(&mut self, block: u64, anchor_px96: U256, fee_q48: u64) -> Result<()> {
         let payload = serde_json::to_string(&UpdatesPayload {
             block,
-            anchor_px48: anchor_px48.to_string(),
+            anchor_px96: anchor_px96.to_string(),
             fee: fee_q48.to_string(),
         })?;
         let _: () = self.conn.set_ex(self.k_updates(), payload, UPD_TTL).await?;
         Ok(())
     }
 
-    pub async fn set_sqrt_price(&mut self, sqrt_price_x48: u128) -> Result<()> {
+    pub async fn set_sqrt_price(&mut self, sqrt_price_x96: U256) -> Result<()> {
         let _: () = self
             .conn
-            .set_ex(self.k_sqrt_price(), sqrt_price_x48.to_string(), SQRT_TTL)
+            .set_ex(self.k_sqrt_price(), sqrt_price_x96.to_string(), SQRT_TTL)
             .await?;
         Ok(())
     }
@@ -120,7 +123,7 @@ impl Cache {
 
     pub async fn apply_swap(
         &mut self,
-        sqrt_price_x48: u128,
+        sqrt_price_x96: U256,
         reserve_x: u128,
         reserve_y: u128,
     ) -> Result<()> {
@@ -128,7 +131,7 @@ impl Cache {
             serde_json::to_string(&ReservesPayload::from_pair(reserve_x, reserve_y))?;
         let _: () = redis::pipe()
             .atomic()
-            .set_ex(self.k_sqrt_price(), sqrt_price_x48.to_string(), SQRT_TTL)
+            .set_ex(self.k_sqrt_price(), sqrt_price_x96.to_string(), SQRT_TTL)
             .set_ex(self.k_reserves(), reserves_payload, RESERVES_TTL)
             .query_async(&mut self.conn)
             .await?;
@@ -141,18 +144,18 @@ impl Cache {
     pub async fn apply_state_update(
         &mut self,
         block: u64,
-        anchor_px48: u128,
+        anchor_px96: U256,
         fee_q48: u64,
     ) -> Result<()> {
         let payload = serde_json::to_string(&UpdatesPayload {
             block,
-            anchor_px48: anchor_px48.to_string(),
+            anchor_px96: anchor_px96.to_string(),
             fee: fee_q48.to_string(),
         })?;
         let _: () = redis::pipe()
             .atomic()
             .set_ex(self.k_updates(), payload, UPD_TTL)
-            .set_ex(self.k_sqrt_price(), anchor_px48.to_string(), SQRT_TTL)
+            .set_ex(self.k_sqrt_price(), anchor_px96.to_string(), SQRT_TTL)
             .query_async(&mut self.conn)
             .await?;
         Ok(())
@@ -190,22 +193,22 @@ impl Cache {
 
         let reserve_x = parse_decimal_u128(&r.0).unwrap_or(0);
         let reserve_y = parse_decimal_u128(&r.1).unwrap_or(0);
-        let anchor_px48 = parse_decimal_u128(&u.anchor_px48).unwrap_or(0);
+        let anchor_px96 = parse_decimal_u256(&u.anchor_px96).unwrap_or(U256::ZERO);
         let fee_q48 = u.fee.parse::<u64>().unwrap_or(0);
 
-        let sqrt_price_x48 = sqrt_price
-            .and_then(|s| parse_decimal_u128(s))
-            .unwrap_or(anchor_px48);
+        let sqrt_price_x96 = sqrt_price
+            .and_then(|s| parse_decimal_u256(s))
+            .unwrap_or(anchor_px96);
 
         let concentration_k = concentration_k
             .and_then(|s| s.parse::<u32>().ok())
+            .map(|k| k << 12) // legacy publishes plain uint32 K; math expects Q20.12
             .unwrap_or(0);
         let block_delay = block_delay.and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
         let paused = paused.is_some_and(|s| s == "1");
 
         Ok(Some(PoolState {
-            sqrt_price_x48,
-            anchor_sqrt_price_x48: anchor_px48,
+            sqrt_price_x96,
             fee_q48,
             latest_update_block: u.block,
             reserve_x,

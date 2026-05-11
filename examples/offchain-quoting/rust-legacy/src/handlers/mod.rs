@@ -7,7 +7,7 @@ use tracing::{debug, info, warn};
 
 use crate::abi::Pool;
 use crate::cache::Cache;
-use crate::pool_state::px96_to_px48;
+use crate::pool_state::px96_to_u256;
 use crate::ws::types::LogEvent;
 use crate::ws::ChainEvent;
 
@@ -46,13 +46,13 @@ async fn handle_log(log: LogEvent, cache: &mut Cache) -> Result<()> {
         // implicitly resets the local swap-driven cache to the anchor.
         let ev = decode::<Pool::StateUpdated>(&log)?;
         let p_x96 = ev.state.pX96;
-        let p_x48 = px96_to_px48(p_x96);
+        let p_x96_u = px96_to_u256(p_x96);
         let fee: u64 = ev.state.fee.to();
-        cache.apply_state_update(block, p_x48, fee).await?;
+        cache.apply_state_update(block, p_x96_u, fee).await?;
         info!(
             block,
             %p_x96,
-            anchor_px48 = p_x48,
+            anchor_px96 = %p_x96_u,
             fee_q48 = fee,
             "StateUpdated (legacy Q96)"
         );

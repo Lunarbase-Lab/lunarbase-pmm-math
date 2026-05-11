@@ -11,17 +11,17 @@ import (
 )
 
 type vector struct {
-	Name   string `json:"name"`
-	Dir    string `json:"dir"`
-	PX48   string `json:"pX48"`
-	Fee    string `json:"fee"`
-	ResX   string `json:"resX"`
-	ResY   string `json:"resY"`
-	K      uint32 `json:"k"`
-	Dx     string `json:"dx,omitempty"`
-	Dy     string `json:"dy,omitempty"`
-	PNext  string `json:"pNext"`
-	FeeAmt string `json:"feeAmt"`
+	Name         string `json:"name"`
+	Dir          string `json:"dir"`
+	SqrtPriceX96 string `json:"sqrtPriceX96"`
+	Fee          string `json:"fee"`
+	ResX         string `json:"resX"`
+	ResY         string `json:"resY"`
+	K            uint32 `json:"k"`
+	Dx           string `json:"dx,omitempty"`
+	Dy           string `json:"dy,omitempty"`
+	PNext        string `json:"pNext"`
+	FeeAmt       string `json:"feeAmt"`
 }
 
 func runVectorFile(t *testing.T, path string) {
@@ -48,7 +48,7 @@ func runVectorFile(t *testing.T, path string) {
 		require.NoError(t, json.Unmarshal([]byte(raw), &v), "parse error line %d", line)
 		total++
 
-		p := u(v.PX48)
+		p := u(v.SqrtPriceX96)
 		feeX24 := uint32(u(v.Fee).Uint64())
 		var feeAsk, feeBid uint32
 		if v.Dir == "xToY" {
@@ -57,13 +57,12 @@ func runVectorFile(t *testing.T, path string) {
 			feeAsk = feeX24
 		}
 		params := &PoolParams{
-			SqrtPriceX48:       p,
-			AnchorSqrtPriceX48: p,
-			FeeAskX24:          feeAsk,
-			FeeBidX24:          feeBid,
-			ReserveX:           u(v.ResX),
-			ReserveY:           u(v.ResY),
-			ConcentrationKQ12:  v.K,
+			SqrtPriceX96:   p,
+			FeeAskX24:      feeAsk,
+			FeeBidX24:      feeBid,
+			ReserveX:       u(v.ResX),
+			ReserveY:       u(v.ResY),
+			ConcentrationK: v.K,
 		}
 
 		if v.Dir == "xToY" {

@@ -6,31 +6,29 @@ import (
 	"github.com/holiman/uint256"
 )
 
-const q48u = uint64(1) << 48
-
 func symmetricPool() *PoolParams {
-	p := uint256.NewInt(q48u)
 	return &PoolParams{
-		SqrtPriceX48:       p,
-		AnchorSqrtPriceX48: p,
-		FeeAskX24:          (1 << 24) / 1_000, // 0.10%
-		FeeBidX24:          (1 << 24) / 1_000, // 0.10%
-		ReserveX:           uint256.NewInt(1_000_000_000_000_000_000),
-		ReserveY:           uint256.NewInt(1_000_000_000_000_000_000),
-		ConcentrationKQ12:  5_000,
+		SqrtPriceX96:   new(uint256.Int).Set(q96), // price = 1.0
+		FeeAskX24:      (1 << 24) / 1_000,         // 0.10%
+		FeeBidX24:      (1 << 24) / 1_000,         // 0.10%
+		ReserveX:       uint256.NewInt(1_000_000_000_000_000_000),
+		ReserveY:       uint256.NewInt(1_000_000_000_000_000_000),
+		ConcentrationK: 5_000,
 	}
 }
 
 func asymmetricPool() *PoolParams {
-	p := uint256.NewInt((q48u * 3) / 2)
+	// price = 2.25 → sqrt = 1.5 → sqrtPriceX96 = 1.5 × 2^96
+	p := new(uint256.Int).Set(q96)
+	p.Mul(p, uint256.NewInt(3))
+	p.Rsh(p, 1) // divide by 2
 	return &PoolParams{
-		SqrtPriceX48:       p,
-		AnchorSqrtPriceX48: p,
-		FeeAskX24:          (1 << 24) / 100, // 1.00%
-		FeeBidX24:          (1 << 24) / 333, // ~0.30%
-		ReserveX:           uint256.NewInt(750_000_000_000_000_000),
-		ReserveY:           uint256.NewInt(1_500_000_000_000_000_000),
-		ConcentrationKQ12:  8_000,
+		SqrtPriceX96:   p,
+		FeeAskX24:      (1 << 24) / 100, // 1.00%
+		FeeBidX24:      (1 << 24) / 333, // ~0.30%
+		ReserveX:       uint256.NewInt(750_000_000_000_000_000),
+		ReserveY:       uint256.NewInt(1_500_000_000_000_000_000),
+		ConcentrationK: 8_000,
 	}
 }
 
