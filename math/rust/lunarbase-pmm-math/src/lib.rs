@@ -32,7 +32,7 @@ mod fuzz_tests;
 mod tests;
 
 pub use curve_pmm::{
-    quote_x_to_y, quote_y_to_x, sqrt_price_x48_to_x96, sqrt_price_x96_to_x48, PoolParams,
-    QuoteResult,
+    plain_to_q12_concentration_k, q12_to_plain_concentration_k, quote_x_to_y, quote_y_to_x,
+    sqrt_price_x48_to_x96, sqrt_price_x96_to_x48, PoolParams, QuoteResult,
 };
 pub use uint256::{U256Ext, U256};

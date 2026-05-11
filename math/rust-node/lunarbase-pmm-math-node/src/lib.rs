@@ -189,3 +189,42 @@ pub fn quote_y_to_x_napi(params: QuoteParams) -> Result<QuoteResult> {
     let result = curve_pmm::quote_y_to_x(&pool, amount_in);
     Ok(from_internal_result(result))
 }
+
+/// Lift a Q32.48 sqrt-price (legacy uint80) into a Q64.96 sqrt-price
+/// (uint160). Lossless. Pass decimal or 0x-hex string; result is decimal.
+#[napi(js_name = "sqrtPriceX48ToX96")]
+pub fn sqrt_price_x48_to_x96_napi(p_x48: String) -> Result<String> {
+    let v = parse_u256(&p_x48)?;
+    if !v.fits_u80() {
+        return Err(Error::from_reason(format!(
+            "value too large for uint80: {p_x48}"
+        )));
+    }
+    let out = curve_pmm::sqrt_price_x48_to_x96(v.as_u128());
+    Ok(u256_to_string(out))
+}
+
+/// Lower a Q64.96 sqrt-price (uint160) into a Q32.48 sqrt-price (uint80)
+/// by right-shifting 48 bits. Truncates the bottom 48 bits of precision —
+/// for backward-compat with legacy serialised state only.
+#[napi(js_name = "sqrtPriceX96ToX48")]
+pub fn sqrt_price_x96_to_x48_napi(p_x96: String) -> Result<String> {
+    let v = parse_u160_field(&p_x96)?;
+    let out = curve_pmm::sqrt_price_x96_to_x48(v);
+    Ok(out.to_string())
+}
+
+/// Lift a plain effective `K` (e.g. `100`) into the Q20.12 representation
+/// expected by `QuoteParams.concentrationK`. `plainToQ12ConcentrationK(100)
+/// === 409_600`. Saturates at `0xFFFFFFFF` if the shift would overflow.
+#[napi(js_name = "plainToQ12ConcentrationK")]
+pub fn plain_to_q12_concentration_k_napi(k: u32) -> u32 {
+    curve_pmm::plain_to_q12_concentration_k(k)
+}
+
+/// Lower a Q20.12 `concentration_k` back to its effective integer `K`
+/// (truncated). `q12ToPlainConcentrationK(409_600) === 100`.
+#[napi(js_name = "q12ToPlainConcentrationK")]
+pub fn q12_to_plain_concentration_k_napi(k_q12: u32) -> u32 {
+    curve_pmm::q12_to_plain_concentration_k(k_q12)
+}

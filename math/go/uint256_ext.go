@@ -72,3 +72,21 @@ func SqrtPriceX96ToX48(pX96 *uint256.Int) *uint256.Int {
 	out := new(uint256.Int).Set(pX96)
 	return out.Rsh(out, 48)
 }
+
+// PlainToQ12ConcentrationK lifts a plain effective K (no fractional part)
+// into the Q20.12 representation expected by `PoolParams.ConcentrationK`.
+// `PlainToQ12ConcentrationK(100) == 409_600`. Saturates at math.MaxUint32
+// if the shift would overflow.
+func PlainToQ12ConcentrationK(k uint32) uint32 {
+	const limit = uint32(1) << 20 // (math.MaxUint32 >> 12) + 1
+	if k >= limit {
+		return ^uint32(0)
+	}
+	return k << 12
+}
+
+// Q12ToPlainConcentrationK reverses [PlainToQ12ConcentrationK] (truncates the
+// fractional part). `Q12ToPlainConcentrationK(409_600) == 100`.
+func Q12ToPlainConcentrationK(kQ12 uint32) uint32 {
+	return kQ12 >> 12
+}

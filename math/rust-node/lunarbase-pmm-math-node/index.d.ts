@@ -32,3 +32,25 @@ export interface QuoteResult {
 }
 export declare function quoteXToY(params: QuoteParams): QuoteResult
 export declare function quoteYToX(params: QuoteParams): QuoteResult
+/**
+ * Lift a Q32.48 sqrt-price (legacy uint80) into a Q64.96 sqrt-price
+ * (uint160). Lossless. Pass decimal or 0x-hex string; result is decimal.
+ */
+export declare function sqrtPriceX48ToX96(pX48: string): string
+/**
+ * Lower a Q64.96 sqrt-price (uint160) into a Q32.48 sqrt-price (uint80)
+ * by right-shifting 48 bits. Truncates the bottom 48 bits of precision —
+ * for backward-compat with legacy serialised state only.
+ */
+export declare function sqrtPriceX96ToX48(pX96: string): string
+/**
+ * Lift a plain effective `K` (e.g. `100`) into the Q20.12 representation
+ * expected by `QuoteParams.concentrationK`. `plainToQ12ConcentrationK(100)
+ * === 409_600`. Saturates at `0xFFFFFFFF` if the shift would overflow.
+ */
+export declare function plainToQ12ConcentrationK(k: number): number
+/**
+ * Lower a Q20.12 `concentration_k` back to its effective integer `K`
+ * (truncated). `q12ToPlainConcentrationK(409_600) === 100`.
+ */
+export declare function q12ToPlainConcentrationK(kQ12: number): number

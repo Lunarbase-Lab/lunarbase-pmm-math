@@ -62,6 +62,22 @@ pub fn sqrt_price_x96_to_x48(p_x96: U256) -> u128 {
     shifted.as_u128()
 }
 
+/// Convert a plain effective `K` (no fractional part) into the Q20.12
+/// representation that [`PoolParams::concentration_k`] expects on the wire.
+/// `plain_to_q12_concentration_k(100) == 409_600`. Saturates at
+/// `u32::MAX` if the shift would overflow.
+#[inline]
+pub fn plain_to_q12_concentration_k(k: u32) -> u32 {
+    k.checked_shl(12).unwrap_or(u32::MAX)
+}
+
+/// Convert a Q20.12 stored `concentration_k` back to its effective integer
+/// `K` (truncated). `q12_to_plain_concentration_k(409_600) == 100`.
+#[inline]
+pub fn q12_to_plain_concentration_k(k_q12: u32) -> u32 {
+    k_q12 >> 12
+}
+
 /// Snapshot of pool state required to compute a quote.
 pub struct PoolParams {
     /// Sqrt-price in Q64.96 (uint160 on-chain). Only operator's `upd()`

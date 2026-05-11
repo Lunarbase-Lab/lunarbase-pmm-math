@@ -7,3 +7,7 @@ const binding = require("./index.cjs");
 
 export const quoteXToY = binding.quoteXToY;
 export const quoteYToX = binding.quoteYToX;
+export const sqrtPriceX48ToX96 = binding.sqrtPriceX48ToX96;
+export const sqrtPriceX96ToX48 = binding.sqrtPriceX96ToX48;
+export const plainToQ12ConcentrationK = binding.plainToQ12ConcentrationK;
+export const q12ToPlainConcentrationK = binding.q12ToPlainConcentrationK;
