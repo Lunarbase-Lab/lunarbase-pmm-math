@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 description = "Pure Rust port of the LunarBase Curve PMM quoting math, bit-exact with the on-chain reference."
-readme = "../../../README.md"
+readme = "README.md"
 keywords = ["lunarbase", "pmm", "amm", "defi", "math"]
 categories = ["mathematics", "no-std::no-alloc"]
 # Heavy test fixtures live in the repo root and are pulled into `src/{tests,
