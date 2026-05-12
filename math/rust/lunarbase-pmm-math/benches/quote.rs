@@ -7,14 +7,14 @@
 #![allow(missing_docs)] // criterion_group! generates a pub mod that's not documented
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use lunarbase_pmm_math::{quote_x_to_y, quote_y_to_x, PoolParams, U256Ext, U256};
+use lunarbase_pmm_math::{quote_x_to_y, quote_y_to_x, PoolParams, U256};
 
 const Q24: u32 = 1u32 << 24;
 
 fn symmetric_pool() -> PoolParams {
     PoolParams {
-        // Q64.96 = 2^96 represents price = 1.0
-        sqrt_price_x96: U256::Q96,
+        // Q32.48 = 2^48 represents price = 1.0
+        sqrt_price_x48: 1u128 << 48,
         fee_ask_x24: Q24 / 1_000, // 0.10%
         fee_bid_x24: Q24 / 1_000, // 0.10%
         reserve_x: 1_000_000_000_000_000_000,
@@ -24,10 +24,9 @@ fn symmetric_pool() -> PoolParams {
 }
 
 fn asymmetric_pool() -> PoolParams {
-    // price = 2.25 → sqrt = 1.5 → sqrtPriceX96 = 1.5 × 2^96
-    let p = U256::Q96.wrapping_mul(U256::from(3u64)).shr(1);
+    // price = 2.25 → sqrt = 1.5 → sqrtPriceX48 = 1.5 × 2^48 = 3 × 2^47
     PoolParams {
-        sqrt_price_x96: p,
+        sqrt_price_x48: 3u128 << 47,
         fee_ask_x24: Q24 / 100, // 1.00%
         fee_bid_x24: Q24 / 333, // ~0.30%
         reserve_x: 750_000_000_000_000_000,

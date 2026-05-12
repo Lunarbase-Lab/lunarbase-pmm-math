@@ -3,12 +3,12 @@
 //! Run from the repo root:
 //!   cargo run --manifest-path examples/minimal/rust/Cargo.toml
 
-use lunarbase_pmm_math::{quote_x_to_y, quote_y_to_x, PoolParams, U256Ext, U256};
+use lunarbase_pmm_math::{quote_x_to_y, quote_y_to_x, PoolParams, U256};
 
 fn main() {
     let params = PoolParams {
-        // Q64.96 = 2^96 represents price = 1.0.
-        sqrt_price_x96: U256::Q96,
+        // Q32.48 = 2^48 represents price = 1.0.
+        sqrt_price_x48: 1u128 << 48,
         // 0.10% fees in Q24 (Q24 = 2^24 = 100%).
         fee_ask_x24: (1u32 << 24) / 1000,
         fee_bid_x24: (1u32 << 24) / 1000,

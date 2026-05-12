@@ -6,8 +6,8 @@ quotes for `X→Y` and `Y→X` swaps on a symmetric pool — so you can sanity-c
 that all three implementations agree:
 
 ```
-X->Y  in=10000  out=9990  fee=9  pNext=79228162514169890263886670022
-Y->X  in=10000  out=9990  fee=9  pNext=79228162514358784923201343240
+X->Y  in=10000  out=9974  fee=9  pNext=281474976710321
+Y->X  in=10000  out=9974  fee=9  pNext=281474976710991
 ```
 
 All paths below are relative to the repository root.
