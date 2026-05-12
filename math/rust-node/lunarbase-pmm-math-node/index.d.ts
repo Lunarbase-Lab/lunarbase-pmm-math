@@ -5,10 +5,10 @@
 
 export interface QuoteParams {
   /**
-   * sqrtPriceX96 (Q64.96, uint160) as decimal or hex string.
+   * sqrtPriceX48 (Q32.48, uint80) as decimal or hex string.
    * Single canonical price — operator-set, swaps do not move it.
    */
-  sqrtPriceX96: string
+  sqrtPriceX48: string
   /** fee charged on Y → X swaps in Q24 (uint24). */
   feeAskX24: number
   /** fee charged on X → Y swaps in Q24 (uint24). */
@@ -25,7 +25,7 @@ export interface QuoteParams {
 export interface QuoteResult {
   /** output amount as decimal string */
   amountOut: string
-  /** new sqrt price as decimal string */
+  /** new Q32.48 sqrt price as decimal string */
   sqrtPriceNext: string
   /** fee amount as decimal string */
   fee: string
@@ -33,14 +33,19 @@ export interface QuoteResult {
 export declare function quoteXToY(params: QuoteParams): QuoteResult
 export declare function quoteYToX(params: QuoteParams): QuoteResult
 /**
- * Lift a Q32.48 sqrt-price (legacy uint80) into a Q64.96 sqrt-price
- * (uint160). Lossless. Pass decimal or 0x-hex string; result is decimal.
+ * **Deprecated** — Q48 is the canonical wire format after the Q48 migration.
+ * Lift a Q32.48 sqrt-price (uint80) into a Q64.96 sqrt-price (uint160) by
+ * shifting left 48 bits. Lossless. Pass decimal or 0x-hex string; result is decimal.
+ *
+ * Kept for interoperating with legacy serialised Q96 state.
  */
 export declare function sqrtPriceX48ToX96(pX48: string): string
 /**
+ * **Deprecated** — Q48 is the canonical wire format after the Q48 migration.
  * Lower a Q64.96 sqrt-price (uint160) into a Q32.48 sqrt-price (uint80)
- * by right-shifting 48 bits. Truncates the bottom 48 bits of precision —
- * for backward-compat with legacy serialised state only.
+ * by right-shifting 48 bits. Truncates the bottom 48 bits of precision.
+ *
+ * Kept for migrating legacy Q96 serialised state.
  */
 export declare function sqrtPriceX96ToX48(pX96: string): string
 /**
@@ -55,25 +60,27 @@ export declare function plainToQ12ConcentrationK(k: number): number
  */
 export declare function q12ToPlainConcentrationK(kQ12: number): number
 /**
- * Convert a plain decimal price (e.g. `2500.0`) into a Q64.96 sqrt-price
- * (uint160). Lossy beyond JS `number`'s 53-bit significand; result is a
- * decimal string. Throws on NaN/Infinity/negative price.
- */
-export declare function priceToSqrtPriceX96(price: number): string
-/**
- * Convert a Q64.96 sqrt-price back to a plain decimal price (`(p/2^96)^2`).
- * Pass decimal or 0x-hex string; result is a JS `number`, lossy beyond
- * 53-bit significand.
- */
-export declare function sqrtPriceX96ToPrice(pX96: string): number
-/**
  * Convert a plain decimal price into a Q32.48 sqrt-price (uint80) as a
  * decimal string. Throws on NaN/Infinity/negative price. Saturates at
  * `2^80 - 1` on overflow.
  */
 export declare function priceToSqrtPriceX48(price: number): string
 /**
- * Convert a Q32.48 sqrt-price (uint80) back to a plain decimal price. Pass
- * decimal or 0x-hex string.
+ * Convert a Q32.48 sqrt-price (uint80) back to a plain decimal price.
+ * Pass decimal or 0x-hex string. Lossy beyond JS `number`'s 53-bit significand.
  */
 export declare function sqrtPriceX48ToPrice(pX48: string): number
+/**
+ * **Deprecated** — use [`priceToSqrtPriceX48`] in new code.
+ * Convert a plain decimal price (e.g. `2500.0`) into a Q64.96 sqrt-price
+ * (uint160). Lossy beyond JS `number`'s 53-bit significand; result is a
+ * decimal string. Throws on NaN/Infinity/negative price.
+ */
+export declare function priceToSqrtPriceX96(price: number): string
+/**
+ * **Deprecated** — use [`sqrtPriceX48ToPrice`] in new code.
+ * Convert a Q64.96 sqrt-price back to a plain decimal price (`(p/2^96)^2`).
+ * Pass decimal or 0x-hex string; result is a JS `number`, lossy beyond
+ * 53-bit significand.
+ */
+export declare function sqrtPriceX96ToPrice(pX96: string): number

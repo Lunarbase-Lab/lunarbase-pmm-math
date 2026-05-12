@@ -1,14 +1,25 @@
 //! N-API binding exposing [`lunarbase_pmm_math`] to Node.js.
+//!
+//! Public surface is Q32.48 (sqrt-price as uint80) to match the `fix/incident`
+//! on-chain contract bit-for-bit. Legacy Q64.96 helpers are retained but
+//! deprecated and should only be used for migrating serialised pre-Q48 state.
 #![allow(
     missing_docs,
     clippy::needless_pass_by_value,
     clippy::missing_safety_doc
 )]
 
-use lunarbase_pmm_math::curve_pmm::{self, PoolParams, QuoteResult as InternalQuoteResult};
+#[allow(deprecated)]
+use lunarbase_pmm_math::curve_pmm::{
+    self, plain_to_q12_concentration_k, price_to_sqrt_price_x48, price_to_sqrt_price_x96,
+    q12_to_plain_concentration_k, sqrt_price_x48_to_price, sqrt_price_x48_to_x96,
+    sqrt_price_x96_to_price, sqrt_price_x96_to_x48, PoolParams, QuoteResult as InternalQuoteResult,
+};
 use lunarbase_pmm_math::uint256::{U256Ext, U256};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+
+const U80_MAX: u128 = (1u128 << 80) - 1;
 
 /// Parse a BigInt-compatible string (decimal or 0x hex) into U256.
 fn parse_u256(s: &str) -> Result<U256> {
@@ -99,6 +110,16 @@ fn parse_u128_field(s: &str) -> Result<u128> {
     Ok(v.as_u128())
 }
 
+fn parse_u80_field(s: &str) -> Result<u128> {
+    let v = parse_u256(s)?;
+    if !v.fits_u80() {
+        return Err(Error::from_reason(format!(
+            "value too large for uint80: {s}"
+        )));
+    }
+    Ok(v.as_u128())
+}
+
 fn parse_u160_field(s: &str) -> Result<U256> {
     let v = parse_u256(s)?;
     if !v.fits_u160() {
@@ -120,9 +141,9 @@ fn parse_u24_field(name: &str, value: u32) -> Result<u32> {
 
 #[napi(object)]
 pub struct QuoteParams {
-    /// sqrtPriceX96 (Q64.96, uint160) as decimal or hex string.
+    /// sqrtPriceX48 (Q32.48, uint80) as decimal or hex string.
     /// Single canonical price — operator-set, swaps do not move it.
-    pub sqrt_price_x96: String,
+    pub sqrt_price_x48: String,
     /// fee charged on Y → X swaps in Q24 (uint24).
     pub fee_ask_x24: u32,
     /// fee charged on X → Y swaps in Q24 (uint24).
@@ -141,14 +162,14 @@ pub struct QuoteParams {
 pub struct QuoteResult {
     /// output amount as decimal string
     pub amount_out: String,
-    /// new sqrt price as decimal string
+    /// new Q32.48 sqrt price as decimal string
     pub sqrt_price_next: String,
     /// fee amount as decimal string
     pub fee: String,
 }
 
 fn to_pool_params(p: &QuoteParams) -> Result<(PoolParams, U256)> {
-    let sqrt_price_x96 = parse_u160_field(&p.sqrt_price_x96)?;
+    let sqrt_price_x48 = parse_u80_field(&p.sqrt_price_x48)?;
     let fee_ask_x24 = parse_u24_field("fee_ask_x24", p.fee_ask_x24)?;
     let fee_bid_x24 = parse_u24_field("fee_bid_x24", p.fee_bid_x24)?;
     let reserve_x = parse_u128_field(&p.reserve_x)?;
@@ -157,7 +178,7 @@ fn to_pool_params(p: &QuoteParams) -> Result<(PoolParams, U256)> {
 
     Ok((
         PoolParams {
-            sqrt_price_x96,
+            sqrt_price_x48,
             fee_ask_x24,
             fee_bid_x24,
             reserve_x,
@@ -171,7 +192,7 @@ fn to_pool_params(p: &QuoteParams) -> Result<(PoolParams, U256)> {
 fn from_internal_result(r: InternalQuoteResult) -> QuoteResult {
     QuoteResult {
         amount_out: u256_to_string(r.amount_out),
-        sqrt_price_next: u256_to_string(r.sqrt_price_next),
+        sqrt_price_next: r.sqrt_price_next.to_string(),
         fee: u256_to_string(r.fee),
     }
 }
@@ -190,8 +211,11 @@ pub fn quote_y_to_x_napi(params: QuoteParams) -> Result<QuoteResult> {
     Ok(from_internal_result(result))
 }
 
-/// Lift a Q32.48 sqrt-price (legacy uint80) into a Q64.96 sqrt-price
-/// (uint160). Lossless. Pass decimal or 0x-hex string; result is decimal.
+/// **Deprecated** — Q48 is the canonical wire format after the Q48 migration.
+/// Lift a Q32.48 sqrt-price (uint80) into a Q64.96 sqrt-price (uint160) by
+/// shifting left 48 bits. Lossless. Pass decimal or 0x-hex string; result is decimal.
+///
+/// Kept for interoperating with legacy serialised Q96 state.
 #[napi(js_name = "sqrtPriceX48ToX96")]
 pub fn sqrt_price_x48_to_x96_napi(p_x48: String) -> Result<String> {
     let v = parse_u256(&p_x48)?;
@@ -200,17 +224,21 @@ pub fn sqrt_price_x48_to_x96_napi(p_x48: String) -> Result<String> {
             "value too large for uint80: {p_x48}"
         )));
     }
-    let out = curve_pmm::sqrt_price_x48_to_x96(v.as_u128());
+    #[allow(deprecated)]
+    let out = sqrt_price_x48_to_x96(v.as_u128());
     Ok(u256_to_string(out))
 }
 
+/// **Deprecated** — Q48 is the canonical wire format after the Q48 migration.
 /// Lower a Q64.96 sqrt-price (uint160) into a Q32.48 sqrt-price (uint80)
-/// by right-shifting 48 bits. Truncates the bottom 48 bits of precision —
-/// for backward-compat with legacy serialised state only.
+/// by right-shifting 48 bits. Truncates the bottom 48 bits of precision.
+///
+/// Kept for migrating legacy Q96 serialised state.
 #[napi(js_name = "sqrtPriceX96ToX48")]
 pub fn sqrt_price_x96_to_x48_napi(p_x96: String) -> Result<String> {
     let v = parse_u160_field(&p_x96)?;
-    let out = curve_pmm::sqrt_price_x96_to_x48(v);
+    #[allow(deprecated)]
+    let out = sqrt_price_x96_to_x48(v);
     Ok(out.to_string())
 }
 
@@ -219,36 +247,14 @@ pub fn sqrt_price_x96_to_x48_napi(p_x96: String) -> Result<String> {
 /// === 409_600`. Saturates at `0xFFFFFFFF` if the shift would overflow.
 #[napi(js_name = "plainToQ12ConcentrationK")]
 pub fn plain_to_q12_concentration_k_napi(k: u32) -> u32 {
-    curve_pmm::plain_to_q12_concentration_k(k)
+    plain_to_q12_concentration_k(k)
 }
 
 /// Lower a Q20.12 `concentration_k` back to its effective integer `K`
 /// (truncated). `q12ToPlainConcentrationK(409_600) === 100`.
 #[napi(js_name = "q12ToPlainConcentrationK")]
 pub fn q12_to_plain_concentration_k_napi(k_q12: u32) -> u32 {
-    curve_pmm::q12_to_plain_concentration_k(k_q12)
-}
-
-/// Convert a plain decimal price (e.g. `2500.0`) into a Q64.96 sqrt-price
-/// (uint160). Lossy beyond JS `number`'s 53-bit significand; result is a
-/// decimal string. Throws on NaN/Infinity/negative price.
-#[napi(js_name = "priceToSqrtPriceX96")]
-pub fn price_to_sqrt_price_x96_napi(price: f64) -> Result<String> {
-    if !price.is_finite() || price < 0.0 {
-        return Err(Error::from_reason(format!(
-            "price must be finite and non-negative: {price}"
-        )));
-    }
-    Ok(u256_to_string(curve_pmm::price_to_sqrt_price_x96(price)))
-}
-
-/// Convert a Q64.96 sqrt-price back to a plain decimal price (`(p/2^96)^2`).
-/// Pass decimal or 0x-hex string; result is a JS `number`, lossy beyond
-/// 53-bit significand.
-#[napi(js_name = "sqrtPriceX96ToPrice")]
-pub fn sqrt_price_x96_to_price_napi(p_x96: String) -> Result<f64> {
-    let v = parse_u160_field(&p_x96)?;
-    Ok(curve_pmm::sqrt_price_x96_to_price(v))
+    q12_to_plain_concentration_k(k_q12)
 }
 
 /// Convert a plain decimal price into a Q32.48 sqrt-price (uint80) as a
@@ -261,11 +267,11 @@ pub fn price_to_sqrt_price_x48_napi(price: f64) -> Result<String> {
             "price must be finite and non-negative: {price}"
         )));
     }
-    Ok(curve_pmm::price_to_sqrt_price_x48(price).to_string())
+    Ok(price_to_sqrt_price_x48(price).to_string())
 }
 
-/// Convert a Q32.48 sqrt-price (uint80) back to a plain decimal price. Pass
-/// decimal or 0x-hex string.
+/// Convert a Q32.48 sqrt-price (uint80) back to a plain decimal price.
+/// Pass decimal or 0x-hex string. Lossy beyond JS `number`'s 53-bit significand.
 #[napi(js_name = "sqrtPriceX48ToPrice")]
 pub fn sqrt_price_x48_to_price_napi(p_x48: String) -> Result<f64> {
     let v = parse_u256(&p_x48)?;
@@ -274,5 +280,40 @@ pub fn sqrt_price_x48_to_price_napi(p_x48: String) -> Result<f64> {
             "value too large for uint80: {p_x48}"
         )));
     }
-    Ok(curve_pmm::sqrt_price_x48_to_price(v.as_u128()))
+    Ok(sqrt_price_x48_to_price(v.as_u128()))
+}
+
+/// **Deprecated** — use [`priceToSqrtPriceX48`] in new code.
+/// Convert a plain decimal price (e.g. `2500.0`) into a Q64.96 sqrt-price
+/// (uint160). Lossy beyond JS `number`'s 53-bit significand; result is a
+/// decimal string. Throws on NaN/Infinity/negative price.
+#[napi(js_name = "priceToSqrtPriceX96")]
+pub fn price_to_sqrt_price_x96_napi(price: f64) -> Result<String> {
+    if !price.is_finite() || price < 0.0 {
+        return Err(Error::from_reason(format!(
+            "price must be finite and non-negative: {price}"
+        )));
+    }
+    #[allow(deprecated)]
+    let out = price_to_sqrt_price_x96(price);
+    Ok(u256_to_string(out))
+}
+
+/// **Deprecated** — use [`sqrtPriceX48ToPrice`] in new code.
+/// Convert a Q64.96 sqrt-price back to a plain decimal price (`(p/2^96)^2`).
+/// Pass decimal or 0x-hex string; result is a JS `number`, lossy beyond
+/// 53-bit significand.
+#[napi(js_name = "sqrtPriceX96ToPrice")]
+pub fn sqrt_price_x96_to_price_napi(p_x96: String) -> Result<f64> {
+    let v = parse_u160_field(&p_x96)?;
+    #[allow(deprecated)]
+    let out = sqrt_price_x96_to_price(v);
+    Ok(out)
+}
+
+// Suppress lints about importing deprecated helpers — they're intentionally
+// re-exposed for migration use.
+#[allow(dead_code)]
+fn _silence_deprecated_imports() {
+    let _ = U80_MAX;
 }

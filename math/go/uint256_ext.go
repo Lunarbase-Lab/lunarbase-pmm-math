@@ -6,15 +6,17 @@ import (
 	"github.com/holiman/uint256"
 )
 
-const fixedPoint96Resolution = 96
+const fixedPoint48Resolution = 48
 
 var (
-	one      = uint256.NewInt(1)
-	q12      = new(uint256.Int).Lsh(one, 12)
-	q24      = new(uint256.Int).Lsh(one, 24)
-	q48      = new(uint256.Int).Lsh(one, 48)
-	q96      = new(uint256.Int).Lsh(one, 96)
-	u2Pow160 = new(uint256.Int).Lsh(one, 160)
+	one = uint256.NewInt(1)
+	q12 = new(uint256.Int).Lsh(one, 12)
+	q24 = new(uint256.Int).Lsh(one, 24)
+	q48 = new(uint256.Int).Lsh(one, 48)
+	q96 = new(uint256.Int).Lsh(one, 96) // retained: sqrtP_Q48^2 lives at Q96 scale
+	// u2Pow80 is the exclusive upper bound for a uint80 sqrt-price. Used to
+	// pick the shifted-Q48 fast path in sqrt_price_math.go.
+	u2Pow80 = new(uint256.Int).Lsh(one, 80)
 )
 
 // mulDivDown computes floor(x*y/denominator) into dst with a 512-bit
@@ -53,10 +55,13 @@ func isqrt(dst, x *uint256.Int) *uint256.Int {
 	return dst.Sqrt(x)
 }
 
-// SqrtPriceX48ToX96 lifts a Q32.48 sqrt-price (legacy pX48, uint80) into a
-// Q64.96 sqrt-price (pX96, uint160) by shifting left 48 bits. The result
-// represents the same numerical price (same value of (p/Q)^2). Pass nil
-// through unchanged for ergonomics.
+// SqrtPriceX48ToX96 lifts a Q32.48 sqrt-price (pX48, uint80) into a Q64.96
+// sqrt-price (pX96, uint160) by shifting left 48 bits. The result represents
+// the same numerical price (same value of (p/Q)^2). Pass nil through
+// unchanged for ergonomics.
+//
+// Deprecated: Q48 is the canonical wire format after the Q48 migration. This
+// helper is kept only for interoperating with legacy serialised state.
 func SqrtPriceX48ToX96(pX48 *uint256.Int) *uint256.Int {
 	if pX48 == nil {
 		return nil
@@ -67,8 +72,10 @@ func SqrtPriceX48ToX96(pX48 *uint256.Int) *uint256.Int {
 
 // SqrtPriceX96ToX48 lowers a Q64.96 sqrt-price (pX96, uint160) into a Q32.48
 // sqrt-price (pX48, uint80) by right-shifting 48 bits, truncating the bottom
-// 48 bits of precision. Used for backward-compat with legacy serialised
-// state. Pass nil through unchanged.
+// 48 bits of precision. Pass nil through unchanged.
+//
+// Deprecated: Q48 is the canonical wire format after the Q48 migration. This
+// helper is kept only for migrating legacy Q96 state.
 func SqrtPriceX96ToX48(pX96 *uint256.Int) *uint256.Int {
 	if pX96 == nil {
 		return nil
@@ -93,29 +100,6 @@ func PlainToQ12ConcentrationK(k uint32) uint32 {
 // fractional part). `Q12ToPlainConcentrationK(409_600) == 100`.
 func Q12ToPlainConcentrationK(kQ12 uint32) uint32 {
 	return kQ12 >> 12
-}
-
-// PriceToSqrtPriceX96 converts a plain decimal price (e.g. 2500.0) into a
-// Q64.96 sqrt-price (uint160). Lossy beyond float64's 53-bit significand.
-// Panics if price is negative, NaN, or +/-Inf. Saturates at 2^256-1 on
-// overflow.
-func PriceToSqrtPriceX96(price float64) *uint256.Int {
-	if math.IsNaN(price) || math.IsInf(price, 0) || price < 0 {
-		panic("price must be finite and non-negative")
-	}
-	scaled := math.Sqrt(price) * math.Pow(2, 96)
-	return f64FloorToU256(scaled)
-}
-
-// SqrtPriceX96ToPrice converts a Q64.96 sqrt-price back to a plain decimal
-// price ((p/2^96)^2). Lossy beyond float64's 53-bit significand. Pass nil
-// through as 0.
-func SqrtPriceX96ToPrice(pX96 *uint256.Int) float64 {
-	if pX96 == nil {
-		return 0
-	}
-	sqrtP := u256ToF64Lossy(pX96) / math.Pow(2, 96)
-	return sqrtP * sqrtP
 }
 
 // PriceToSqrtPriceX48 converts a plain decimal price into a Q32.48 sqrt-price
@@ -144,6 +128,34 @@ func SqrtPriceX48ToPrice(pX48 *uint256.Int) float64 {
 		return 0
 	}
 	sqrtP := u256ToF64Lossy(pX48) / math.Pow(2, 48)
+	return sqrtP * sqrtP
+}
+
+// PriceToSqrtPriceX96 converts a plain decimal price (e.g. 2500.0) into a
+// Q64.96 sqrt-price (uint160). Lossy beyond float64's 53-bit significand.
+// Panics on NaN/Inf/negative; saturates at 2^256-1 on overflow.
+//
+// Deprecated: Q48 is the canonical sqrt-price format; use
+// [PriceToSqrtPriceX48] in new code.
+func PriceToSqrtPriceX96(price float64) *uint256.Int {
+	if math.IsNaN(price) || math.IsInf(price, 0) || price < 0 {
+		panic("price must be finite and non-negative")
+	}
+	scaled := math.Sqrt(price) * math.Pow(2, 96)
+	return f64FloorToU256(scaled)
+}
+
+// SqrtPriceX96ToPrice converts a Q64.96 sqrt-price back to a plain decimal
+// price ((p/2^96)^2). Lossy beyond float64's 53-bit significand. Pass nil
+// through as 0.
+//
+// Deprecated: Q48 is the canonical sqrt-price format; use
+// [SqrtPriceX48ToPrice] in new code.
+func SqrtPriceX96ToPrice(pX96 *uint256.Int) float64 {
+	if pX96 == nil {
+		return 0
+	}
+	sqrtP := u256ToF64Lossy(pX96) / math.Pow(2, 96)
 	return sqrtP * sqrtP
 }
 

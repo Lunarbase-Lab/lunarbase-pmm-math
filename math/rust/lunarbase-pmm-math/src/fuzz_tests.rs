@@ -10,23 +10,19 @@ mod fuzz {
 
     struct FuzzVector {
         dir: String,
-        sqrt_price_x96: U256,
+        sqrt_price_x48: u128,
         fee_x24: u32,
         res_x: u128,
         res_y: u128,
         k_q12: u32,
         amount_in: u128,
         amount_out: u128,
-        p_next: U256,
+        p_next: u128,
         fee_amt: u128,
     }
 
     fn parse_u128(s: &str) -> u128 {
         s.trim_matches('"').parse::<u128>().unwrap()
-    }
-
-    fn parse_u256(s: &str) -> U256 {
-        U256::from_str_radix(s.trim_matches('"'), 10).unwrap()
     }
 
     fn extract_field<'a>(json: &'a str, key: &str) -> &'a str {
@@ -47,12 +43,12 @@ mod fuzz {
 
     fn parse_vector(line: &str) -> FuzzVector {
         let dir = extract_field(line, "dir").to_string();
-        let sqrt_price_x96 = parse_u256(extract_field(line, "sqrtPriceX96"));
+        let sqrt_price_x48 = parse_u128(extract_field(line, "pX48"));
         let fee_x24 = parse_u128(extract_field(line, "fee")) as u32;
         let res_x = parse_u128(extract_field(line, "resX"));
         let res_y = parse_u128(extract_field(line, "resY"));
         let k_q12 = parse_u128(extract_field(line, "k")) as u32;
-        let p_next = parse_u256(extract_field(line, "pNext"));
+        let p_next = parse_u128(extract_field(line, "pNext"));
         let fee_amt = parse_u128(extract_field(line, "feeAmt"));
 
         let (amount_in, amount_out) = if dir == "xToY" {
@@ -69,7 +65,7 @@ mod fuzz {
 
         FuzzVector {
             dir,
-            sqrt_price_x96,
+            sqrt_price_x48,
             fee_x24,
             res_x,
             res_y,
@@ -104,7 +100,7 @@ mod fuzz {
                 (v.fee_x24, 0u32)
             };
             let params = PoolParams {
-                sqrt_price_x96: v.sqrt_price_x96,
+                sqrt_price_x48: v.sqrt_price_x48,
                 fee_ask_x24,
                 fee_bid_x24,
                 reserve_x: v.res_x,

@@ -1,7 +1,9 @@
-import { quoteXToY, quoteYToX } from '@dark-pools/lunarbase-math'
+import { quoteXToY, quoteYToX } from '@lunarbase-lab/pmm-math'
 
 const r = quoteXToY({
-  sqrtPriceX48: '12781077694964135',
+  // Q32.48 sqrt-price (uint80). 12_587_943_637_803_939 ≈ sqrt(2000) * 2^48
+  // (ETH/USDC-style pair, raw units).
+  sqrtPriceX48: '12587943637803939',
   feeAskX24: 0,
   feeBidX24: 50_000, // ~0.298% in Q24
   reserveX: '100000000000000000000',

@@ -21,12 +21,12 @@ vectors generated from the on-chain reference (`deterministic_vectors.jsonl`,
 
 ## Public API
 
-All three implementations expose the same surface — a single Q64.96
-sqrt-price design that mirrors the on-chain `fix/incident` contract:
+All three implementations expose the same surface — a single Q32.48
+sqrt-price (uint80) design that mirrors the on-chain `fix/incident` contract:
 
 ```
 PoolParams {
-    sqrt_price_x96,           // uint160, Q64.96 — the canonical price
+    sqrt_price_x48,           // uint80,  Q32.48 — the canonical price
     fee_ask_x24,              // uint24,  Q24 — fee on Y→X (ask side)
     fee_bid_x24,              // uint24,  Q24 — fee on X→Y (bid side)
     reserve_x,                // uint112
@@ -40,6 +40,13 @@ quote_x_to_y(params, dx) -> QuoteResult
 quote_y_to_x(params, dy) -> QuoteResult
 ```
 
+In Rust, `sqrt_price_x48` is a `u128` — the underlying value is ≤ 2^80, so it
+fits losslessly. Intermediate products that exceed 128 bits (notably
+`anchor * pAsk` ≤ 2^160) widen to `U256` inside the math. Go uses
+`*uint256.Int` throughout for ergonomic parity with the existing reserve
+plumbing. The N-API binding accepts decimal or 0x-hex strings for big
+numbers and `number` for fee/k.
+
 Names follow each language's conventions (`QuoteXToY` in Go,
 `quote_x_to_y` in Rust, `quoteXToY` in the N-API binding).
 
@@ -49,14 +56,24 @@ Encoding helpers for ferrying values across the API boundary:
 
 | Rust                                  | Go                               | N-API / TS                       | Purpose                                                                 |
 | ------------------------------------- | -------------------------------- | -------------------------------- | ----------------------------------------------------------------------- |
-| `sqrt_price_x48_to_x96(p_x48)`        | `SqrtPriceX48ToX96(pX48)`        | `sqrtPriceX48ToX96(pX48)`        | Lift legacy Q32.48 (`uint80`) → Q64.96 (`uint160`). Lossless.           |
-| `sqrt_price_x96_to_x48(p_x96)`        | `SqrtPriceX96ToX48(pX96)`        | `sqrtPriceX96ToX48(pX96)`        | Lower Q64.96 → Q32.48 (truncates 48 bits — legacy migration).           |
+| `price_to_sqrt_price_x48(price)`      | `PriceToSqrtPriceX48(price)`     | `priceToSqrtPriceX48(price)`     | Decimal price → Q32.48 sqrt-price (`uint80`). Saturates at `2^80-1`.    |
+| `sqrt_price_x48_to_price(p_x48)`      | `SqrtPriceX48ToPrice(pX48)`      | `sqrtPriceX48ToPrice(pX48)`      | Q32.48 sqrt-price → decimal price (`(p/2^48)²`). Lossy beyond Q48 precision. |
 | `plain_to_q12_concentration_k(k)`     | `PlainToQ12ConcentrationK(k)`    | `plainToQ12ConcentrationK(k)`    | Plain `K=100` → Q20.12 `409_600` for `concentration_k`.                 |
 | `q12_to_plain_concentration_k(k_q12)` | `Q12ToPlainConcentrationK(kQ12)` | `q12ToPlainConcentrationK(kQ12)` | Q20.12 `409_600` → plain `100` (truncates).                             |
-| `price_to_sqrt_price_x96(price)`      | `PriceToSqrtPriceX96(price)`     | `priceToSqrtPriceX96(price)`     | Decimal price `2500.0` → Q64.96 sqrt-price. Lossy beyond 53-bit f64.    |
-| `sqrt_price_x96_to_price(p_x96)`      | `SqrtPriceX96ToPrice(pX96)`      | `sqrtPriceX96ToPrice(pX96)`      | Q64.96 sqrt-price → decimal price (`(p/2^96)²`). Lossy beyond 53 bits.  |
-| `price_to_sqrt_price_x48(price)`      | `PriceToSqrtPriceX48(price)`     | `priceToSqrtPriceX48(price)`     | Decimal price → Q32.48 sqrt-price (`uint80`). Saturates at `2^80-1`.    |
-| `sqrt_price_x48_to_price(p_x48)`      | `SqrtPriceX48ToPrice(pX48)`      | `sqrtPriceX48ToPrice(pX48)`      | Q32.48 sqrt-price → decimal price. Lossy beyond Q48 precision.          |
+
+### Legacy Q64.96 migration helpers
+
+Retained for callers still carrying serialised state from the pre-Q48 era.
+Marked **deprecated** in every language (Rust `#[deprecated]`, Go
+`// Deprecated:`, TS doc-block) and intended only as one-shot conversion
+aids:
+
+| Rust                             | Go                          | N-API / TS                  | Purpose                                                  |
+| -------------------------------- | --------------------------- | --------------------------- | -------------------------------------------------------- |
+| `sqrt_price_x48_to_x96(p_x48)`   | `SqrtPriceX48ToX96(pX48)`   | `sqrtPriceX48ToX96(pX48)`   | Lift Q32.48 → Q64.96 by `<<48`. Lossless.                |
+| `sqrt_price_x96_to_x48(p_x96)`   | `SqrtPriceX96ToX48(pX96)`   | `sqrtPriceX96ToX48(pX96)`   | Lower Q64.96 → Q32.48 by `>>48`. Truncates 48 fractional bits. |
+| `price_to_sqrt_price_x96(price)` | `PriceToSqrtPriceX96(price)`| `priceToSqrtPriceX96(price)`| Decimal price → Q64.96 sqrt-price.                       |
+| `sqrt_price_x96_to_price(p_x96)` | `SqrtPriceX96ToPrice(pX96)` | `sqrtPriceX96ToPrice(pX96)` | Q64.96 sqrt-price → decimal price.                       |
 
 ## Requirements
 

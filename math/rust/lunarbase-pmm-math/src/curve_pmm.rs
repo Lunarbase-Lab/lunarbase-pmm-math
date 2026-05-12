@@ -1,20 +1,24 @@
 //! Direct port of the Solidity `SwapLib` quoting library on the
-//! `fix/incident` branch (single-price Q64.96 design).
+//! `fix/incident` branch (single-price Q32.48 design).
 //!
 //! Key properties:
 //!
-//! * Single sqrt-price `sqrt_price_x96` (Q64.96, uint160 on-chain). There is
-//!   no separate live-vs-anchor price; the operator-published anchor *is* the
-//!   only price. Swaps compute a hypothetical `pNext` but do not write back
-//!   into state — only `upd()` changes the price. This eliminates the
-//!   drift-based round-trip exploit by construction.
+//! * Single sqrt-price `sqrt_price_x48` (Q32.48, uint80 on-chain, exposed as
+//!   `u128`). There is no separate live-vs-anchor price; the operator-published
+//!   anchor *is* the only price. Swaps compute a hypothetical `pNext` but do
+//!   not write back into state — only `upd()` changes the price.
 //! * Asymmetric directional fees `fee_bid_x24` (X→Y) and `fee_ask_x24` (Y→X),
 //!   both in Q24.
 //! * `concentration_k` is Q20.12; effective K = `concentration_k / 2^12`.
 //! * Concentration formula: `cQ48 = mulDiv(K_Q12, r²_Q48, Q12)` with `r`
-//!   wealth-normalised by `sqrtPriceX96²`.
-//! * Linear-fallback path when `cQ48 == 0`: `dy = mulDiv(mulDiv(dx, p, Q96), p, Q96)`,
-//!   fee on output; `pNext = sqrt_price_x96`.
+//!   wealth-normalised by cascading `mulDiv(_, sqrtP_Q48, Q48)` twice to
+//!   compute `reserveX * P` without precision loss.
+//! * Linear-fallback path when `cQ48 == 0`:
+//!   `dy = mulDiv(mulDiv(dx, p, Q48), p, Q48)`, fee on output;
+//!   `pNext = sqrt_price_x48`.
+//! * `Lx` uses the direct form `mulDiv(reserveX, anchor*pAsk, Q48 * (pAsk-anchor))`
+//!   to preserve Q48-side precision (an intermediate `/Q96` would truncate
+//!   `anchor*pAsk` to ~1 when `sqrtP ≈ 2^48`).
 
 use crate::sqrt_price_math::{
     get_amount_x_delta, get_amount_y_delta, get_next_sqrt_price_from_amount_x_rounding_up,
@@ -22,7 +26,7 @@ use crate::sqrt_price_math::{
 };
 use crate::uint256::{U256Ext, U256};
 
-/// Q48 fixed-point unit (`2^48`), used by the concentration value `cQ48`.
+/// Q48 fixed-point unit (`2^48`), used by sqrt-price scale and concentration `cQ48`.
 pub const Q48: u128 = 1u128 << 48;
 /// Q24 fixed-point unit (`2^24`), used by directional fees and as the
 /// scaling factor for `lower_bound`/`upper_bound`.
@@ -42,11 +46,16 @@ const Q12_U256: U256 = {
     limbs[0] = 1u64 << 12;
     U256::from_limbs(limbs)
 };
-const Q96_U256: U256 = U256::Q96;
 
-/// Lift a Q32.48 sqrt-price (legacy `pX48`, uint80) into a Q64.96 sqrt-price
-/// (`pX96`, uint160) by shifting left 48 bits. The result represents the
-/// same numerical price (same value of `(p/Q)²`).
+/// Lift a Q32.48 sqrt-price (`pX48`, uint80) into a Q64.96 sqrt-price
+/// (`pX96`, uint160) by shifting left 48 bits. Lossless.
+///
+/// Kept for backward-compat with consumers that still carry Q64.96 serialised
+/// state from before the Q48 migration. Prefer Q48 in new code.
+#[deprecated(
+    since = "0.2.0",
+    note = "Q48 is the canonical wire format; lift only when interoperating with legacy Q96 data."
+)]
 #[inline]
 pub fn sqrt_price_x48_to_x96(p_x48: u128) -> U256 {
     U256::from_u128(p_x48).shl(48)
@@ -54,7 +63,13 @@ pub fn sqrt_price_x48_to_x96(p_x48: u128) -> U256 {
 
 /// Lower a Q64.96 sqrt-price (`pX96`, uint160) into a Q32.48 sqrt-price
 /// (`pX48`, uint80) by right-shifting 48 bits, truncating the bottom 48 bits
-/// of precision. Used for backward-compat with legacy serialised state.
+/// of precision.
+///
+/// Kept for legacy migration — discard the truncated remainder.
+#[deprecated(
+    since = "0.2.0",
+    note = "Q48 is the canonical wire format; this lowers (lossy) only for legacy migration."
+)]
 #[inline]
 pub fn sqrt_price_x96_to_x48(p_x96: U256) -> u128 {
     let shifted = p_x96.shr(48);
@@ -78,31 +93,9 @@ pub fn q12_to_plain_concentration_k(k_q12: u32) -> u32 {
     k_q12 >> 12
 }
 
-/// Convert a plain decimal price (e.g. `2500.0`) into a Q64.96 sqrt-price
-/// (`uint160`). Lossy beyond f64's 53-bit significand. Panics if `price` is
-/// negative, NaN, or infinite; saturates at `U256::MAX` on overflow.
-#[inline]
-pub fn price_to_sqrt_price_x96(price: f64) -> U256 {
-    assert!(
-        price.is_finite() && price >= 0.0,
-        "price must be finite and non-negative"
-    );
-    let scaled = price.sqrt() * 2f64.powi(96);
-    f64_floor_to_u256(scaled)
-}
-
-/// Convert a Q64.96 sqrt-price back to a plain decimal price (`(p/2^96)^2`).
-/// Lossy beyond f64's 53-bit significand.
-#[inline]
-pub fn sqrt_price_x96_to_price(p_x96: U256) -> f64 {
-    let f = u256_to_f64_lossy(p_x96);
-    let sqrt_p = f / 2f64.powi(96);
-    sqrt_p * sqrt_p
-}
-
-/// Convert a plain decimal price into a Q32.48 sqrt-price (`uint80`). Lossy
-/// beyond f64's 53-bit significand. Panics if `price` is negative, NaN, or
-/// infinite; saturates at `2^80 - 1` on overflow.
+/// Convert a plain decimal price (e.g. `2500.0`) into a Q32.48 sqrt-price
+/// (`uint80`) as `u128`. Lossy beyond f64's 53-bit significand. Panics if
+/// `price` is negative, NaN, or infinite; saturates at `2^80 - 1` on overflow.
 #[inline]
 pub fn price_to_sqrt_price_x48(price: f64) -> u128 {
     assert!(
@@ -124,6 +117,40 @@ pub fn price_to_sqrt_price_x48(price: f64) -> u128 {
 #[inline]
 pub fn sqrt_price_x48_to_price(p_x48: u128) -> f64 {
     let sqrt_p = (p_x48 as f64) / 2f64.powi(48);
+    sqrt_p * sqrt_p
+}
+
+/// Convert a plain decimal price into a Q64.96 sqrt-price (`uint160`).
+///
+/// Kept for legacy Q96 callers — prefer [`price_to_sqrt_price_x48`] in new
+/// code. Lossy beyond f64's 53-bit significand; saturates at `U256::MAX` on
+/// overflow.
+#[deprecated(
+    since = "0.2.0",
+    note = "Q48 is the canonical sqrt-price format; use price_to_sqrt_price_x48 in new code."
+)]
+#[inline]
+pub fn price_to_sqrt_price_x96(price: f64) -> U256 {
+    assert!(
+        price.is_finite() && price >= 0.0,
+        "price must be finite and non-negative"
+    );
+    let scaled = price.sqrt() * 2f64.powi(96);
+    f64_floor_to_u256(scaled)
+}
+
+/// Convert a Q64.96 sqrt-price back to a plain decimal price (`(p/2^96)^2`).
+///
+/// Kept for legacy Q96 callers — prefer [`sqrt_price_x48_to_price`] in new
+/// code.
+#[deprecated(
+    since = "0.2.0",
+    note = "Q48 is the canonical sqrt-price format; use sqrt_price_x48_to_price in new code."
+)]
+#[inline]
+pub fn sqrt_price_x96_to_price(p_x96: U256) -> f64 {
+    let f = u256_to_f64_lossy(p_x96);
+    let sqrt_p = f / 2f64.powi(96);
     sqrt_p * sqrt_p
 }
 
@@ -165,9 +192,9 @@ fn u256_to_f64_lossy(v: U256) -> f64 {
 
 /// Snapshot of pool state required to compute a quote.
 pub struct PoolParams {
-    /// Sqrt-price in Q64.96 (uint160 on-chain). Only operator's `upd()`
-    /// changes this — swaps do not mutate it.
-    pub sqrt_price_x96: U256,
+    /// Sqrt-price in Q32.48 (uint80 on-chain, exposed as `u128`). Only
+    /// operator's `upd()` changes this — swaps do not mutate it.
+    pub sqrt_price_x48: u128,
     /// Fee charged on Y→X swaps in Q24 (uint24 on-chain).
     pub fee_ask_x24: u32,
     /// Fee charged on X→Y swaps in Q24 (uint24 on-chain).
@@ -184,32 +211,38 @@ pub struct PoolParams {
 pub struct QuoteResult {
     /// Output amount, net of [`Self::fee`].
     pub amount_out: U256,
-    /// Hypothetical sqrt-price the swap would move toward. Returned as
-    /// information; the pool's stored `sqrt_price_x96` is unchanged.
-    pub sqrt_price_next: U256,
+    /// Hypothetical sqrt-price the swap would move toward (Q32.48). Returned
+    /// as information; the pool's stored `sqrt_price_x48` is unchanged.
+    pub sqrt_price_next: u128,
     /// Fee paid in the output token.
     pub fee: U256,
 }
 
 /// Concentration `cQ48 = mulDiv(K_Q12, r²_Q48, Q12)`. `r` is wealth-normalised
-/// using `sqrtPriceX96²`. Saturates at `Q48` (100%).
+/// using cascading `mulDiv(_, sqrtP_Q48, Q48)` twice to compute `reserveX * P`
+/// while preserving precision. Saturates at `Q48` (100%).
+///
+/// Mirrors Solidity `SwapLib.concentrationQ48` exactly.
 pub fn concentration_q48(
-    sqrt_price_x96: U256,
+    sqrt_price_x48: u128,
     amount_in: U256,
     reserve_x: u128,
     reserve_y: u128,
     concentration_k: u32,
     x_to_y: bool,
 ) -> U256 {
-    if amount_in.is_zero() || concentration_k == 0 || sqrt_price_x96.is_zero() {
+    if amount_in.is_zero() || concentration_k == 0 || sqrt_price_x48 == 0 {
         return U256::ZERO;
     }
 
-    // wealthX_in_Y = mulDiv(mulDiv(reserveX, sqrtPX96, Q96), sqrtPX96, Q96)
+    let sqrt_u = U256::from_u128(sqrt_price_x48);
+
+    // xWealthInY = mulDiv(mulDiv(reserveX, sqrtP_Q48, Q48), sqrtP_Q48, Q48)
+    //            = reserveX * P (where P = sqrtP^2)
     let x_wealth_in_y = U256::mul_div(
-        U256::mul_div(U256::from_u128(reserve_x), sqrt_price_x96, Q96_U256),
-        sqrt_price_x96,
-        Q96_U256,
+        U256::mul_div(U256::from_u128(reserve_x), sqrt_u, Q48_U256),
+        sqrt_u,
+        Q48_U256,
     );
     let total_wealth_in_y = x_wealth_in_y.wrapping_add(U256::from_u128(reserve_y));
     if total_wealth_in_y.is_zero() {
@@ -217,11 +250,7 @@ pub fn concentration_q48(
     }
 
     let amount_in_wealth = if x_to_y {
-        U256::mul_div(
-            U256::mul_div(amount_in, sqrt_price_x96, Q96_U256),
-            sqrt_price_x96,
-            Q96_U256,
-        )
+        U256::mul_div(U256::mul_div(amount_in, sqrt_u, Q48_U256), sqrt_u, Q48_U256)
     } else {
         amount_in
     };
@@ -247,58 +276,77 @@ pub fn concentration_q48(
     }
 }
 
-fn lower_bound(sqrt_price_x96: U256, concentration_q48: u64) -> U256 {
+#[inline]
+fn lower_bound(sqrt_price_x48: u128, concentration_q48: u64) -> u128 {
     let one_minus_c_q48 = U256::from_u128(Q48 - (concentration_q48 as u128));
     let sqrt_one_minus_c = one_minus_c_q48.isqrt();
 
-    U256::mul_div(sqrt_price_x96, sqrt_one_minus_c, U256::from_u128(Q24))
+    let result = U256::mul_div(
+        U256::from_u128(sqrt_price_x48),
+        sqrt_one_minus_c,
+        U256::from_u128(Q24),
+    );
+    debug_assert!(result.fits_u80(), "lower_bound overflows u80");
+    result.as_u128()
 }
 
-fn upper_bound(sqrt_price_x96: U256, concentration_q48: u64) -> U256 {
+#[inline]
+fn upper_bound(sqrt_price_x48: u128, concentration_q48: u64) -> u128 {
     let one_minus_c_q48 = U256::from_u128(Q48 - (concentration_q48 as u128));
     let sqrt_one_minus_c = one_minus_c_q48.isqrt();
 
-    U256::mul_div(sqrt_price_x96, U256::from_u128(Q24), sqrt_one_minus_c)
+    let result = U256::mul_div(
+        U256::from_u128(sqrt_price_x48),
+        U256::from_u128(Q24),
+        sqrt_one_minus_c,
+    );
+    assert!(result.fits_u80(), "upper_bound overflows u80");
+    result.as_u128()
 }
 
-fn ly(sqrt_price_x96: U256, p_bid: U256, reserve_y: u128) -> u128 {
-    // L_y = mulDiv(yReserve, Q96, pX96 - pBid)
-    let result = U256::mul_div(U256::from_u128(reserve_y), Q96_U256, sqrt_price_x96 - p_bid);
+/// L_y = mulDiv(yReserve, Q48, sqrtP - pBid). Mirrors `SwapLib.Ly`.
+#[inline]
+fn ly(sqrt_price_x48: u128, p_bid: u128, reserve_y: u128) -> u128 {
+    let result = U256::mul_div(
+        U256::from_u128(reserve_y),
+        Q48_U256,
+        U256::from_u128(sqrt_price_x48 - p_bid),
+    );
     assert!(result.fits_u128(), "Ly overflows u128");
     result.as_u128()
 }
 
-fn lx(sqrt_price_x96: U256, p_ask: U256, reserve_x: u128) -> u128 {
-    // priceProductX96 = mulDiv(sqrt_price_x96, p_ask, Q96)
-    // L_x = mulDiv(xReserve, priceProductX96, p_ask - sqrt_price_x96)
-    let price_product_x96 = U256::mul_div(sqrt_price_x96, p_ask, Q96_U256);
-    let result = U256::mul_div(
-        U256::from_u128(reserve_x),
-        price_product_x96,
-        p_ask - sqrt_price_x96,
-    );
+/// L_x = mulDiv(xReserve, sqrtP * pAsk, Q48 * (pAsk - sqrtP)).
+///
+/// Avoids the intermediate `priceProduct / Q96` truncation that bites at
+/// small sqrt-prices. Mirrors `SwapLib.Lx` after the Q96 → Q48 migration.
+#[inline]
+fn lx(sqrt_price_x48: u128, p_ask: u128, reserve_x: u128) -> u128 {
+    // anchor * pAsk fits in u160 (each operand ≤ 2^80); use U256 to be safe
+    // with the cascading mulDiv.
+    let numerator = U256::from_u128(sqrt_price_x48).wrapping_mul(U256::from_u128(p_ask));
+    let denominator = Q48_U256.wrapping_mul(U256::from_u128(p_ask - sqrt_price_x48));
+    let result = U256::mul_div(U256::from_u128(reserve_x), numerator, denominator);
     assert!(result.fits_u128(), "Lx overflows u128");
     result.as_u128()
 }
 
+#[inline]
 fn apply_fee(gross: U256, fee_x24: u32) -> (U256, U256) {
     let fee = U256::mul_div(gross, U256::from_u128(fee_x24 as u128), Q24_U256);
     (gross - fee, fee)
 }
 
-fn linear_x_to_y(sqrt_price_x96: U256, fee_bid_x24: u32, reserve_y: u128, dx: U256) -> QuoteResult {
+fn linear_x_to_y(sqrt_price_x48: u128, fee_bid_x24: u32, reserve_y: u128, dx: U256) -> QuoteResult {
     let zero = QuoteResult {
         amount_out: U256::ZERO,
-        sqrt_price_next: sqrt_price_x96,
+        sqrt_price_next: sqrt_price_x48,
         fee: U256::ZERO,
     };
 
-    // dy = mulDiv(mulDiv(dx, p, Q96), p, Q96)
-    let dy = U256::mul_div(
-        U256::mul_div(dx, sqrt_price_x96, Q96_U256),
-        sqrt_price_x96,
-        Q96_U256,
-    );
+    let sqrt_u = U256::from_u128(sqrt_price_x48);
+    // dy = mulDiv(mulDiv(dx, p, Q48), p, Q48)
+    let dy = U256::mul_div(U256::mul_div(dx, sqrt_u, Q48_U256), sqrt_u, Q48_U256);
     if dy.is_zero() || dy > U256::from_u128(reserve_y) {
         return zero;
     }
@@ -306,28 +354,25 @@ fn linear_x_to_y(sqrt_price_x96: U256, fee_bid_x24: u32, reserve_y: u128, dx: U2
     let (amount_out, fee) = apply_fee(dy, fee_bid_x24);
     QuoteResult {
         amount_out,
-        sqrt_price_next: sqrt_price_x96,
+        sqrt_price_next: sqrt_price_x48,
         fee,
     }
 }
 
-fn linear_y_to_x(sqrt_price_x96: U256, fee_ask_x24: u32, reserve_x: u128, dy: U256) -> QuoteResult {
+fn linear_y_to_x(sqrt_price_x48: u128, fee_ask_x24: u32, reserve_x: u128, dy: U256) -> QuoteResult {
     let zero = QuoteResult {
         amount_out: U256::ZERO,
-        sqrt_price_next: sqrt_price_x96,
+        sqrt_price_next: sqrt_price_x48,
         fee: U256::ZERO,
     };
 
-    if sqrt_price_x96.is_zero() {
+    if sqrt_price_x48 == 0 {
         return zero;
     }
 
-    // dx = mulDiv(mulDiv(dy, Q96, p), Q96, p)
-    let dx = U256::mul_div(
-        U256::mul_div(dy, Q96_U256, sqrt_price_x96),
-        Q96_U256,
-        sqrt_price_x96,
-    );
+    let sqrt_u = U256::from_u128(sqrt_price_x48);
+    // dx = mulDiv(mulDiv(dy, Q48, p), Q48, p)
+    let dx = U256::mul_div(U256::mul_div(dy, Q48_U256, sqrt_u), Q48_U256, sqrt_u);
     if dx.is_zero() || dx > U256::from_u128(reserve_x) {
         return zero;
     }
@@ -335,7 +380,7 @@ fn linear_y_to_x(sqrt_price_x96: U256, fee_ask_x24: u32, reserve_x: u128, dy: U2
     let (amount_out, fee) = apply_fee(dx, fee_ask_x24);
     QuoteResult {
         amount_out,
-        sqrt_price_next: sqrt_price_x96,
+        sqrt_price_next: sqrt_price_x48,
         fee,
     }
 }
@@ -345,12 +390,12 @@ fn linear_y_to_x(sqrt_price_x96: U256, fee_ask_x24: u32, reserve_x: u128, dy: U2
 pub fn quote_x_to_y(params: &PoolParams, dx: U256) -> QuoteResult {
     let zero = QuoteResult {
         amount_out: U256::ZERO,
-        sqrt_price_next: params.sqrt_price_x96,
+        sqrt_price_next: params.sqrt_price_x48,
         fee: U256::ZERO,
     };
 
     let c_q48 = concentration_q48(
-        params.sqrt_price_x96,
+        params.sqrt_price_x48,
         dx,
         params.reserve_x,
         params.reserve_y,
@@ -360,7 +405,7 @@ pub fn quote_x_to_y(params: &PoolParams, dx: U256) -> QuoteResult {
 
     if c_q48.is_zero() {
         return linear_x_to_y(
-            params.sqrt_price_x96,
+            params.sqrt_price_x48,
             params.fee_bid_x24,
             params.reserve_y,
             dx,
@@ -371,20 +416,20 @@ pub fn quote_x_to_y(params: &PoolParams, dx: U256) -> QuoteResult {
     }
 
     let c_u64 = c_q48.as_u128() as u64;
-    let p_bid = lower_bound(params.sqrt_price_x96, c_u64);
-    if params.sqrt_price_x96 <= p_bid {
+    let p_bid = lower_bound(params.sqrt_price_x48, c_u64);
+    if params.sqrt_price_x48 <= p_bid {
         return zero;
     }
-    let liquidity = ly(params.sqrt_price_x96, p_bid, params.reserve_y);
+    let liquidity = ly(params.sqrt_price_x48, p_bid, params.reserve_y);
 
-    let max_net_dx = get_amount_x_delta(p_bid, params.sqrt_price_x96, liquidity, false);
+    let max_net_dx = get_amount_x_delta(p_bid, params.sqrt_price_x48, liquidity, false);
     if dx > max_net_dx {
         return zero;
     }
 
     let p_next =
-        get_next_sqrt_price_from_amount_x_rounding_up(params.sqrt_price_x96, liquidity, dx);
-    let dy = get_amount_y_delta(params.sqrt_price_x96, p_next, liquidity, false);
+        get_next_sqrt_price_from_amount_x_rounding_up(params.sqrt_price_x48, liquidity, dx);
+    let dy = get_amount_y_delta(params.sqrt_price_x48, p_next, liquidity, false);
     let (amount_out, fee) = apply_fee(dy, params.fee_bid_x24);
     QuoteResult {
         amount_out,
@@ -398,12 +443,12 @@ pub fn quote_x_to_y(params: &PoolParams, dx: U256) -> QuoteResult {
 pub fn quote_y_to_x(params: &PoolParams, dy: U256) -> QuoteResult {
     let zero = QuoteResult {
         amount_out: U256::ZERO,
-        sqrt_price_next: params.sqrt_price_x96,
+        sqrt_price_next: params.sqrt_price_x48,
         fee: U256::ZERO,
     };
 
     let c_q48 = concentration_q48(
-        params.sqrt_price_x96,
+        params.sqrt_price_x48,
         dy,
         params.reserve_x,
         params.reserve_y,
@@ -413,7 +458,7 @@ pub fn quote_y_to_x(params: &PoolParams, dy: U256) -> QuoteResult {
 
     if c_q48.is_zero() {
         return linear_y_to_x(
-            params.sqrt_price_x96,
+            params.sqrt_price_x48,
             params.fee_ask_x24,
             params.reserve_x,
             dy,
@@ -424,20 +469,20 @@ pub fn quote_y_to_x(params: &PoolParams, dy: U256) -> QuoteResult {
     }
 
     let c_u64 = c_q48.as_u128() as u64;
-    let p_ask = upper_bound(params.sqrt_price_x96, c_u64);
-    if params.sqrt_price_x96 >= p_ask {
+    let p_ask = upper_bound(params.sqrt_price_x48, c_u64);
+    if params.sqrt_price_x48 >= p_ask {
         return zero;
     }
-    let liquidity = lx(params.sqrt_price_x96, p_ask, params.reserve_x);
+    let liquidity = lx(params.sqrt_price_x48, p_ask, params.reserve_x);
 
-    let max_net_dy = get_amount_y_delta(params.sqrt_price_x96, p_ask, liquidity, false);
+    let max_net_dy = get_amount_y_delta(params.sqrt_price_x48, p_ask, liquidity, false);
     if dy > max_net_dy {
         return zero;
     }
 
     let p_next =
-        get_next_sqrt_price_from_amount_y_rounding_down(params.sqrt_price_x96, liquidity, dy);
-    let dx = get_amount_x_delta(params.sqrt_price_x96, p_next, liquidity, false);
+        get_next_sqrt_price_from_amount_y_rounding_down(params.sqrt_price_x48, liquidity, dy);
+    let dx = get_amount_x_delta(params.sqrt_price_x48, p_next, liquidity, false);
     let (amount_out, fee) = apply_fee(dx, params.fee_ask_x24);
     QuoteResult {
         amount_out,
@@ -447,29 +492,9 @@ pub fn quote_y_to_x(params: &PoolParams, dy: U256) -> QuoteResult {
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod price_conversion_tests {
     use super::*;
-
-    #[test]
-    fn price_x96_round_trip_unit() {
-        let p_x96 = price_to_sqrt_price_x96(1.0);
-        assert_eq!(p_x96, U256::Q96);
-        let back = sqrt_price_x96_to_price(p_x96);
-        assert!((back - 1.0).abs() < 1e-15);
-    }
-
-    #[test]
-    fn price_x96_round_trip_assorted() {
-        for &price in &[0.25_f64, 1.5, 2500.0, 1e-9, 1e9] {
-            let p_x96 = price_to_sqrt_price_x96(price);
-            let back = sqrt_price_x96_to_price(p_x96);
-            let rel_err = ((back - price) / price).abs();
-            assert!(
-                rel_err < 1e-14,
-                "price={price} back={back} rel_err={rel_err}"
-            );
-        }
-    }
 
     #[test]
     fn price_x48_round_trip_unit() {
@@ -494,23 +519,41 @@ mod price_conversion_tests {
     }
 
     #[test]
+    fn price_x96_legacy_round_trip_unit() {
+        let p_x96 = price_to_sqrt_price_x96(1.0);
+        assert_eq!(p_x96, U256::Q96);
+        let back = sqrt_price_x96_to_price(p_x96);
+        assert!((back - 1.0).abs() < 1e-15);
+    }
+
+    #[test]
     fn price_zero_maps_to_zero() {
-        assert_eq!(price_to_sqrt_price_x96(0.0), U256::ZERO);
         assert_eq!(price_to_sqrt_price_x48(0.0), 0);
-        assert_eq!(sqrt_price_x96_to_price(U256::ZERO), 0.0);
         assert_eq!(sqrt_price_x48_to_price(0), 0.0);
+        assert_eq!(price_to_sqrt_price_x96(0.0), U256::ZERO);
+        assert_eq!(sqrt_price_x96_to_price(U256::ZERO), 0.0);
     }
 
     #[test]
     fn x48_x96_lifts_preserve_price() {
+        // Lifting Q48 → Q96 is lossless (just <<48); price round-trips at Q48 precision.
         let price = 1234.5;
         let p_x48 = price_to_sqrt_price_x48(price);
         let p_x96 = sqrt_price_x48_to_x96(p_x48);
-        // p_x96 should equal price_to_sqrt_price_x96(price) shifted-down by the
-        // 48 bits of dropped fraction — i.e. agree up to the X48 precision.
         let back = sqrt_price_x96_to_price(p_x96);
         let rel_err = ((back - price) / price).abs();
         assert!(rel_err < 1e-12, "back={back} rel_err={rel_err}");
+    }
+
+    #[test]
+    fn x96_x48_lower_is_lossy() {
+        let price = 1234.5;
+        let p_x96 = price_to_sqrt_price_x96(price);
+        let p_x48 = sqrt_price_x96_to_x48(p_x96);
+        // Q48 has ~14.5 decimal digits; rel-err scales as 2/(p*2^48).
+        let back = sqrt_price_x48_to_price(p_x48);
+        let rel_err = ((back - price) / price).abs();
+        assert!(rel_err < 1e-10, "back={back} rel_err={rel_err}");
     }
 
     #[test]
@@ -525,7 +568,7 @@ mod price_conversion_tests {
     #[test]
     #[should_panic(expected = "must be finite")]
     fn price_nan_panics() {
-        let _ = price_to_sqrt_price_x96(f64::NAN);
+        let _ = price_to_sqrt_price_x48(f64::NAN);
     }
 
     #[test]

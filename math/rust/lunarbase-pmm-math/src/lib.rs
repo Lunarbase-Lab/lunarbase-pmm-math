@@ -1,17 +1,18 @@
 //! Pure Rust port of the LunarBase Curve PMM quoting math.
 //!
-//! The crate is bit-for-bit identical with the on-chain Solidity reference,
-//! validated by deterministic and fuzz vectors generated from the contract.
-//! It has no `unsafe`, no FFI, no allocations on the hot path, and depends
-//! only on [`ruint`] for fixed-width integers.
+//! The crate is bit-for-bit identical with the on-chain Solidity reference
+//! (`fix/incident` branch, single-price Q32.48 design), validated by
+//! deterministic and fuzz vectors generated from the contract. It has no
+//! `unsafe`, no FFI, no allocations on the hot path, and depends only on
+//! [`ruint`] for fixed-width integers.
 //!
 //! # Quick start
 //!
 //! ```
-//! use lunarbase_pmm_math::{quote_x_to_y, PoolParams, U256, U256Ext};
+//! use lunarbase_pmm_math::{quote_x_to_y, PoolParams, U256};
 //!
 //! let params = PoolParams {
-//!     sqrt_price_x96: U256::Q96, // price = 1.0
+//!     sqrt_price_x48: 1u128 << 48, // price = 1.0
 //!     fee_ask_x24: 0,
 //!     fee_bid_x24: (1u32 << 24) / 1000, // 0.10% bid fee
 //!     reserve_x: 1_000_000,
@@ -31,6 +32,7 @@ mod fuzz_tests;
 #[cfg(test)]
 mod tests;
 
+#[allow(deprecated)]
 pub use curve_pmm::{
     plain_to_q12_concentration_k, price_to_sqrt_price_x48, price_to_sqrt_price_x96,
     q12_to_plain_concentration_k, quote_x_to_y, quote_y_to_x, sqrt_price_x48_to_price,

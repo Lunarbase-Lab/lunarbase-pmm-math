@@ -8,7 +8,7 @@ import (
 
 func symmetricPool() *PoolParams {
 	return &PoolParams{
-		SqrtPriceX96:   new(uint256.Int).Set(q96), // price = 1.0
+		SqrtPriceX48:   new(uint256.Int).Set(q48), // price = 1.0
 		FeeAskX24:      (1 << 24) / 1_000,         // 0.10%
 		FeeBidX24:      (1 << 24) / 1_000,         // 0.10%
 		ReserveX:       uint256.NewInt(1_000_000_000_000_000_000),
@@ -18,12 +18,12 @@ func symmetricPool() *PoolParams {
 }
 
 func asymmetricPool() *PoolParams {
-	// price = 2.25 → sqrt = 1.5 → sqrtPriceX96 = 1.5 × 2^96
-	p := new(uint256.Int).Set(q96)
+	// price = 2.25 → sqrt = 1.5 → sqrtPriceX48 = 1.5 × 2^48
+	p := new(uint256.Int).Set(q48)
 	p.Mul(p, uint256.NewInt(3))
 	p.Rsh(p, 1) // divide by 2
 	return &PoolParams{
-		SqrtPriceX96:   p,
+		SqrtPriceX48:   p,
 		FeeAskX24:      (1 << 24) / 100, // 1.00%
 		FeeBidX24:      (1 << 24) / 333, // ~0.30%
 		ReserveX:       uint256.NewInt(750_000_000_000_000_000),
