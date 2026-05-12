@@ -1,16 +1,14 @@
 # Minimal examples
 
-The smallest possible end-to-end usage of `lunarbase-pmm-math` from each
-supported language. Every example produces the same two lines of output —
-quotes for `X→Y` and `Y→X` swaps on a symmetric pool — so you can sanity-check
-that all three implementations agree:
+Smallest end-to-end usage of `lunarbase-pmm-math` from each supported
+language. All three produce the same two-line output:
 
 ```
 X->Y  in=10000  out=9974  fee=9  pNext=281474976710321
 Y->X  in=10000  out=9974  fee=9  pNext=281474976710991
 ```
 
-All paths below are relative to the repository root.
+Paths are relative to the repository root.
 
 ## Rust
 
@@ -18,8 +16,7 @@ All paths below are relative to the repository root.
 cargo run --manifest-path examples/minimal/rust/Cargo.toml
 ```
 
-The example crate has its own `Cargo.toml` and is excluded from the workspace
-so it doesn't slow down `cargo build` on the math crates.
+The example crate has its own `Cargo.toml` and is excluded from the workspace.
 
 ## Go
 
@@ -27,21 +24,11 @@ so it doesn't slow down `cargo build` on the math crates.
 go run ./examples/minimal/go
 ```
 
-`examples/minimal/go/go.mod` uses a `replace` directive to consume the local
-package in `math/go`. To depend on a published version instead, drop the
-`replace` line and pin `github.com/Lunarbase-Lab/lunarbase-pmm-math/math/go` to a
-tagged version in the `require` block.
+`examples/minimal/go/go.mod` uses a `replace` directive for the local
+`math/go` package. Drop it and pin a tagged version to depend on the
+published module instead.
 
 ## TypeScript / Node.js
-
-The TypeScript example consumes the `lunarbase-pmm-math-node` package via a
-local `file:` dependency, so usage is just a clean ES-module import:
-
-```ts
-import { quoteXToY, quoteYToX } from "lunarbase-pmm-math-node";
-```
-
-Run it:
 
 ```sh
 cd examples/minimal/typescript
@@ -49,10 +36,8 @@ npm install
 npm run run
 ```
 
-The `prerun` script builds the napi addon in
-`math/rust-node/lunarbase-pmm-math-node` via `@napi-rs/cli`, which generates
-the platform-specific `.node` binary plus an ESM/CJS dual-export wrapper and
-TypeScript declarations. The first invocation takes ~30 s while cargo
-compiles `napi-derive`; subsequent runs are instant.
+The `prerun` script builds the napi addon via `@napi-rs/cli`. The first
+invocation takes ~30 s while cargo compiles `napi-derive`; subsequent runs
+are instant.
 
-Requirements: Node.js 18+ on Linux/macOS.
+Requirements: Node.js 18+ on Linux or macOS.
