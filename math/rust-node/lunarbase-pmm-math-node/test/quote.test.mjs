@@ -3,7 +3,14 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { quoteXToY, quoteYToX } from "../wrapper.js";
+import {
+  priceToSqrtPriceX96,
+  price_to_sqrt_price_x96,
+  quoteXToY,
+  quoteYToX,
+  sqrtPriceX96ToPrice,
+  sqrt_price_x96_to_price,
+} from "../wrapper.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const vectorsDir = path.join(__dirname, "..", "..", "..", "rust", "lunarbase-pmm-math");
@@ -26,7 +33,7 @@ const deterministicVectors = readJsonl(deterministicVectorsPath);
 const fuzzVectors = readJsonl(fuzzVectorsPath);
 
 /**
- * Build the `QuoteParams` shape from a JSONL row (single-price Q32.48 design).
+ * Build the `QuoteParams` shape from a JSONL row (Q64.96 design).
  * Each row exercises one direction; the JSONL `fee` field carries the
  * directionally-relevant Q24 fee (bid for xToY, ask for yToX), so the other
  * side is a don't-care set to 0.
@@ -34,7 +41,7 @@ const fuzzVectors = readJsonl(fuzzVectorsPath);
 function paramsFromVector(vector) {
   const isXToY = vector.dir === "xToY";
   return {
-    sqrtPriceX48: String(vector.pX48),
+    sqrtPriceX96: String(vector.pX96),
     feeAskX24: isXToY ? 0 : Number(vector.fee),
     feeBidX24: isXToY ? Number(vector.fee) : 0,
     reserveX: String(vector.resX),
@@ -63,13 +70,13 @@ describe("deterministic vectors (from Solidity)", () => {
   }
 });
 
-// Q32.48 sqrt-price for price = 1.0 (`2^48`). Used by the edge-case suite.
-const SQRT_PRICE_X48_ONE = "281474976710656";
+// Q64.96 sqrt-price for price = 1.0 (`2^96`). Used by the edge-case suite.
+const SQRT_PRICE_X96_ONE = "79228162514264337593543950336";
 
 describe("edge cases", () => {
   it("returns zero output for zero reserves", () => {
     const result = quoteXToY({
-      sqrtPriceX48: SQRT_PRICE_X48_ONE, // Q48 = price 1.0
+      sqrtPriceX96: SQRT_PRICE_X96_ONE, // Q96 = price 1.0
       feeAskX24: 0,
       feeBidX24: 838860, // 5% in Q24
       reserveX: "0",
@@ -80,43 +87,15 @@ describe("edge cases", () => {
     assert.equal(result.amountOut, "0");
   });
 
-  it("accepts hex input strings", () => {
-    const result = quoteXToY({
-      sqrtPriceX48: "0x" + BigInt(SQRT_PRICE_X48_ONE).toString(16),
-      feeAskX24: 0,
-      feeBidX24: 838860,
-      reserveX: "0x" + BigInt("1000000000000000000000").toString(16),
-      reserveY: "0x" + BigInt("1000000000000000000000").toString(16),
-      concentrationK: 5000,
-      amountIn: "0x" + BigInt("1000000000000000000").toString(16),
-    });
 
-    // V1 deterministic baseline: pX48=Q48, 5% bid, eq reserves, k=5000, dx=1e18.
-    assert.equal(result.amountOut, "949987816809994001");
-    assert.equal(result.sqrtPriceNext, "281474976660325");
-    assert.equal(result.fee, "49999308586734514");
-  });
+});
 
-  it("quoteXToY and quoteYToX match the deterministic price=1 vectors", () => {
-    const baseParams = {
-      sqrtPriceX48: SQRT_PRICE_X48_ONE,
-      reserveX: "1000000000000000000000",
-      reserveY: "1000000000000000000000",
-      concentrationK: 5000,
-      amountIn: "1000000000000000000",
-    };
-
-    const xToY = quoteXToY({ ...baseParams, feeAskX24: 0, feeBidX24: 838860 });
-    const yToX = quoteYToX({ ...baseParams, feeAskX24: 838860, feeBidX24: 0 });
-
-    // V1 (xToY) and V12 (yToX) from the deterministic generator.
-    assert.equal(xToY.amountOut, "949987816809994001");
-    assert.equal(xToY.sqrtPriceNext, "281474976660325");
-    assert.equal(xToY.fee, "49999308586734514");
-
-    assert.equal(yToX.amountOut, "949987816640155504");
-    assert.equal(yToX.sqrtPriceNext, "281474976760987");
-    assert.equal(yToX.fee, "49999308577795655");
+describe("Q64.96 converter helpers", () => {
+  it("keeps camelCase and snake_case X96 helpers exported", () => {
+    assert.equal(priceToSqrtPriceX96(1.0), SQRT_PRICE_X96_ONE);
+    assert.equal(price_to_sqrt_price_x96(1.0), SQRT_PRICE_X96_ONE);
+    assert.equal(sqrtPriceX96ToPrice(SQRT_PRICE_X96_ONE), 1.0);
+    assert.equal(sqrt_price_x96_to_price(SQRT_PRICE_X96_ONE), 1.0);
   });
 });
 

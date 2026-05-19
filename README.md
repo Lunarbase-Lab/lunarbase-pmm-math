@@ -18,17 +18,16 @@ shared JSONL test vectors.
 
 ## Public API
 
-Single Q32.48 sqrt-price (uint80) design, mirroring the on-chain `fix/incident`
-contract:
+Q64.96 sqrt-price (`uint160`) design, mirroring the current on-chain Pool:
 
 ```
 PoolParams {
-    sqrt_price_x48,    // uint80,  Q32.48 — canonical price
-    fee_ask_x24,       // uint24,  Q24 — fee on Y→X
-    fee_bid_x24,       // uint24,  Q24 — fee on X→Y
-    reserve_x,         // uint112
-    reserve_y,         // uint112
-    concentration_k,   // uint32,  Q20.12 (effective K = stored / 2^12)
+    sqrt_price_x96,        // uint160, Q64.96 — operator-published sqrt-price
+    fee_ask_x24,           // uint24,  Q24 — fee on Y→X
+    fee_bid_x24,           // uint24,  Q24 — fee on X→Y
+    reserve_x,             // uint112
+    reserve_y,             // uint112
+    concentration_k,       // uint32,  Q20.12 (effective K = stored / 2^12)
 }
 
 quote_x_to_y(params, dx) -> QuoteResult { amount_out, sqrt_price_next, fee }
@@ -43,14 +42,11 @@ Names follow each language's conventions: `quote_x_to_y` (Rust), `QuoteXToY`
 
 | Rust                                  | Go                               | N-API / TS                       | Purpose                                                              |
 | ------------------------------------- | -------------------------------- | -------------------------------- | -------------------------------------------------------------------- |
-| `price_to_sqrt_price_x48(price)`      | `PriceToSqrtPriceX48(price)`     | `priceToSqrtPriceX48(price)`     | `f64` decimal price → Q32.48. Saturates at `2^80-1`.                 |
-| `sqrt_price_x48_to_price(p_x48)`      | `SqrtPriceX48ToPrice(pX48)`      | `sqrtPriceX48ToPrice(pX48)`      | Q32.48 → `f64` decimal price `(p/2^48)²`.                            |
+| `price_to_sqrt_price_x96(price)`      | `PriceToSqrtPriceX96(price)`     | `priceToSqrtPriceX96(price)`     | `f64` decimal price → Q64.96.                                        |
+| `sqrt_price_x96_to_price(p_x96)`      | `SqrtPriceX96ToPrice(pX96)`      | `sqrtPriceX96ToPrice(pX96)`      | Q64.96 → `f64` decimal price `(p/2^96)²`.                            |
+| same as above                         | —                                | `price_to_sqrt_price_x96(price)` / `sqrt_price_x96_to_price(pX96)` | N-API compatibility aliases for the X96 converter helpers. |
 | `plain_to_q12_concentration_k(k)`     | `PlainToQ12ConcentrationK(k)`    | `plainToQ12ConcentrationK(k)`    | Plain `K=100` → Q20.12 `409_600`.                                    |
 | `q12_to_plain_concentration_k(k_q12)` | `Q12ToPlainConcentrationK(kQ12)` | `q12ToPlainConcentrationK(kQ12)` | Q20.12 → plain `K` (truncates).                                      |
-
-Legacy Q64.96 helpers (`sqrt_price_x48_to_x96`, `sqrt_price_x96_to_x48`,
-`price_to_sqrt_price_x96`, `sqrt_price_x96_to_price`) are retained but marked
-deprecated — use only for migrating pre-Q48 serialised state.
 
 ## Build & test
 

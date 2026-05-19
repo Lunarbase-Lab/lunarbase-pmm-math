@@ -2,7 +2,7 @@
 
 N-API binding exposing [`lunarbase-pmm-math`](https://crates.io/crates/lunarbase-pmm-math)
 to Node.js. Bit-exact mirror of the on-chain LunarBase Curve PMM quoting math
-(single-price **Q32.48** design), verified against deterministic and fuzz
+(**Q64.96** `uint160` sqrt-price design), verified against deterministic and fuzz
 vectors generated from the on-chain Solidity contract.
 
 ## Install
@@ -28,14 +28,14 @@ Open an issue if you need musl, darwin-x64, or win32-x64.
 import {
   quoteXToY,
   plainToQ12ConcentrationK,
-  priceToSqrtPriceX48,
+  priceToSqrtPriceX96,
   type QuoteParams,
 } from "@lunarbase-lab/pmm-math";
 
 const params: QuoteParams = {
-  // Q32.48 sqrt-price (uint80). 2^48 = price 1.0; use priceToSqrtPriceX48
+  // Q64.96 sqrt-price (uint160). 2^96 = price 1.0; use priceToSqrtPriceX96
   // for arbitrary decimal prices.
-  sqrtPriceX48: priceToSqrtPriceX48(1.0),
+  sqrtPriceX96: priceToSqrtPriceX96(1.0),
   feeAskX24: 0,           // Q24, charged on Y→X
   feeBidX24: 838860,      // Q24, ≈ 5% charged on X→Y
   reserveX: "1000000000000000000000",
@@ -57,12 +57,9 @@ or `0x`-hex). Output amounts are decimal strings.
 | Function                                                          | Purpose                                                |
 | ----------------------------------------------------------------- | ------------------------------------------------------ |
 | `quoteXToY(params)` / `quoteYToX(params)`                         | Bit-exact mirrors of Solidity `SwapLib`.               |
-| `priceToSqrtPriceX48(price)` / `sqrtPriceX48ToPrice(p)`           | `number` price ↔ Q32.48 sqrt-price.                    |
+| `priceToSqrtPriceX96(price)` / `sqrtPriceX96ToPrice(p)`           | `number` price ↔ Q64.96 sqrt-price.                    |
+| `price_to_sqrt_price_x96(price)` / `sqrt_price_x96_to_price(p)`   | Compatibility aliases for the X96 converter helpers.   |
 | `plainToQ12ConcentrationK(k)` / `q12ToPlainConcentrationK(kQ12)`  | Plain `K` ↔ Q20.12 `concentrationK`.                   |
-
-Legacy Q64.96 helpers (`sqrtPriceX48ToX96`, `sqrtPriceX96ToX48`,
-`priceToSqrtPriceX96`, `sqrtPriceX96ToPrice`) are retained for migrating
-pre-Q48 serialised state; marked deprecated in `index.d.ts`.
 
 ## Pure-Rust crate
 

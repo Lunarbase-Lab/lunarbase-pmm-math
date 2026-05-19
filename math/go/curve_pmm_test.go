@@ -42,7 +42,7 @@ func TestConcentrationQ48_ZeroK(t *testing.T) {
 
 func TestQuoteReturnsZeroWhenNoLiquidity(t *testing.T) {
 	params := &PoolParams{
-		SqrtPriceX48:   q48, // Q48 = price 1.0
+		SqrtPriceX96:   q96, // Q96 = price 1.0
 		FeeAskX24:      0,
 		FeeBidX24:      0,
 		ReserveX:       new(uint256.Int),

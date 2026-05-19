@@ -7,8 +7,8 @@ use lunarbase_pmm_math::{quote_x_to_y, quote_y_to_x, PoolParams, U256};
 
 fn main() {
     let params = PoolParams {
-        // Q32.48 = 2^48 represents price = 1.0.
-        sqrt_price_x48: 1u128 << 48,
+        // Q64.96 = 2^96 represents price = 1.0.
+        sqrt_price_x96: 1u128 << 96,
         // 0.10% fees in Q24 (Q24 = 2^24 = 100%).
         fee_ask_x24: (1u32 << 24) / 1000,
         fee_bid_x24: (1u32 << 24) / 1000,

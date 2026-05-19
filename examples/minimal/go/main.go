@@ -12,14 +12,15 @@ import (
 )
 
 func main() {
+	p := new(uint256.Int).Lsh(uint256.NewInt(1), 96)
 	params := &pmm.PoolParams{
-		// Q32.48 = 2^48 represents price = 1.0.
-		SqrtPriceX48:   uint256.NewInt(1 << 48),
-		FeeAskX24:      (1 << 24) / 1_000, // 0.10%
-		FeeBidX24:      (1 << 24) / 1_000, // 0.10%
-		ReserveX:       uint256.NewInt(1_000_000_000),
-		ReserveY:       uint256.NewInt(1_000_000_000),
-		ConcentrationK: 5_000 << 12, // legacy K=5000 in Q20.12 encoding
+		// Q64.96 = 2^96 represents price = 1.0.
+		SqrtPriceX96:       p,
+		FeeAskX24:          (1 << 24) / 1_000, // 0.10%
+		FeeBidX24:          (1 << 24) / 1_000, // 0.10%
+		ReserveX:           uint256.NewInt(1_000_000_000),
+		ReserveY:           uint256.NewInt(1_000_000_000),
+		ConcentrationK:     5_000 << 12, // legacy K=5000 in Q20.12 encoding
 	}
 
 	dx := uint256.NewInt(10_000)

@@ -1,7 +1,7 @@
 //! ABI for the legacy Pool contract.
 //!
 //! Differences vs the current Pool ABI:
-//! - sqrt-price is published as `uint160 pX96` (Q96), not `uint80 pX48` (Q48)
+//! - sqrt-price is published as `uint160 pX96` (Q96)
 //! - `state()` returns `(uint160 pX96, uint48 fee, uint48 latestUpdateBlock)`
 //! - no separate `anchorPrice()` view: the operator-published `pX96` *is* the
 //!   anchor and is also the post-update sqrt-price
