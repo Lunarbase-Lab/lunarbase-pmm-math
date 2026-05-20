@@ -190,10 +190,6 @@ func QuoteXToYInto(out *QuoteResult, params *PoolParams, dx *uint256.Int) *Quote
 
 	getNextSqrtPriceFromAmountXRoundingUp(&pNext, params.SqrtPriceX96, &liquidity, dx)
 	getAmountYDelta(&dy, params.SqrtPriceX96, &pNext, &liquidity, false)
-	if dy.IsZero() {
-		linearXToY(out, params, dx)
-		return out
-	}
 
 	feeQ24.SetUint64(uint64(params.FeeBidX24))
 	mulDivDown(out.Fee, &dy, &feeQ24, q24)
@@ -237,10 +233,6 @@ func QuoteYToXInto(out *QuoteResult, params *PoolParams, dy *uint256.Int) *Quote
 
 	getNextSqrtPriceFromAmountYRoundingDown(&pNext, params.SqrtPriceX96, &liquidity, dy)
 	getAmountXDelta(&dxOut, params.SqrtPriceX96, &pNext, &liquidity, false)
-	if dxOut.IsZero() {
-		linearYToX(out, params, dy)
-		return out
-	}
 
 	feeQ24.SetUint64(uint64(params.FeeAskX24))
 	mulDivDown(out.Fee, &dxOut, &feeQ24, q24)

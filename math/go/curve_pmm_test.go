@@ -53,6 +53,25 @@ func TestQuoteReturnsZeroWhenNoLiquidity(t *testing.T) {
 	assert.True(t, result.AmountOut.IsZero())
 }
 
+func TestTinyCurveDeltaDoesNotFallbackToLinear(t *testing.T) {
+	params := &PoolParams{
+		SqrtPriceX96:   q96,
+		FeeAskX24:      0,
+		FeeBidX24:      0,
+		ReserveX:       uint256.NewInt(1_000_000),
+		ReserveY:       uint256.NewInt(1_000_000),
+		ConcentrationK: 5_000,
+	}
+
+	xToY := QuoteXToY(params, uint256.NewInt(1))
+	assert.True(t, xToY.AmountOut.IsZero())
+	assert.True(t, xToY.Fee.IsZero())
+
+	yToX := QuoteYToX(params, uint256.NewInt(1))
+	assert.True(t, yToX.AmountOut.IsZero())
+	assert.True(t, yToX.Fee.IsZero())
+}
+
 func TestMulDivCeil(t *testing.T) {
 	mu := func(x, y, d uint64) *uint256.Int {
 		var dst uint256.Int

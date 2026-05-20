@@ -377,15 +377,6 @@ pub fn quote_x_to_y_with_multiplier(
     let p_next =
         get_next_sqrt_price_from_amount_x_rounding_up(params.sqrt_price_x96, liquidity, dx);
     let dy = get_amount_y_delta(params.sqrt_price_x96, p_next, liquidity, false);
-    if dy.is_zero() {
-        return linear_x_to_y(
-            params.sqrt_price_x96,
-            params.fee_bid_x24,
-            params.reserve_y,
-            dx,
-            fee_multiplier,
-        );
-    }
 
     let (amount_out, fee) = apply_fee(dy, params.fee_bid_x24, fee_multiplier);
     QuoteResult {
@@ -444,15 +435,6 @@ pub fn quote_y_to_x_with_multiplier(
     let p_next =
         get_next_sqrt_price_from_amount_y_rounding_down(params.sqrt_price_x96, liquidity, dy);
     let dx = get_amount_x_delta(params.sqrt_price_x96, p_next, liquidity, false);
-    if dx.is_zero() {
-        return linear_y_to_x(
-            params.sqrt_price_x96,
-            params.fee_ask_x24,
-            params.reserve_x,
-            dy,
-            fee_multiplier,
-        );
-    }
 
     let (amount_out, fee) = apply_fee(dx, params.fee_ask_x24, fee_multiplier);
     QuoteResult {

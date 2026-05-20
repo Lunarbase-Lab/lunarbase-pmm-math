@@ -154,4 +154,24 @@ mod cross_validation {
 
         eprintln!("ALL {total} deterministic vectors passed!");
     }
+
+    #[test]
+    fn tiny_curve_delta_does_not_fallback_to_linear() {
+        let params = PoolParams {
+            sqrt_price_x96: 1u128 << 96,
+            fee_ask_x24: 0,
+            fee_bid_x24: 0,
+            reserve_x: 1_000_000,
+            reserve_y: 1_000_000,
+            concentration_k: 5_000,
+        };
+
+        let x_to_y = quote_x_to_y(&params, U256::from(1u64));
+        assert_eq!(x_to_y.amount_out, U256::ZERO);
+        assert_eq!(x_to_y.fee, U256::ZERO);
+
+        let y_to_x = quote_y_to_x(&params, U256::from(1u64));
+        assert_eq!(y_to_x.amount_out, U256::ZERO);
+        assert_eq!(y_to_x.fee, U256::ZERO);
+    }
 }
