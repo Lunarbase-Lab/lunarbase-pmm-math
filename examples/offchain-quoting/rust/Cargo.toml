@@ -16,7 +16,7 @@ tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots", "
 futures-util = "0.3"
 
 # Ethereum primitives + ABI codec + JSON-RPC + provider
-alloy = { version = "0.8", default-features = false, features = [
+alloy = { version = "2.0", default-features = false, features = [
     "std",
     "sol-types",
     "rpc-types-eth",
