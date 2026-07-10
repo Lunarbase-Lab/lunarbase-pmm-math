@@ -1,16 +1,10 @@
 use alloy::primitives::Address;
-use eyre::{Context, Result};
+use eyre::{Context, ContextCompat, Result};
 use redis::aio::ConnectionManager;
 use redis::AsyncCommands;
 
-use crate::pool_state::{
-    parse_decimal_u128, parse_decimal_u256, PoolState, ReservesPayload, UpdatesPayload,
-};
-use lunarbase_pmm_math::U256;
+use crate::pool_state::{parse_decimal_u128, PoolState, ReservesPayload, UpdatesPayload};
 
-const RESERVES_TTL: u64 = 10;
-const UPD_TTL: u64 = 6;
-const SQRT_TTL: u64 = 6;
 const LOG_TTL: u64 = 10;
 
 pub struct Cache {
@@ -70,27 +64,24 @@ impl Cache {
 
     pub async fn set_reserves(&mut self, x: u128, y: u128) -> Result<()> {
         let payload = serde_json::to_string(&ReservesPayload::from_pair(x, y))?;
-        let _: () = self
-            .conn
-            .set_ex(self.k_reserves(), payload, RESERVES_TTL)
-            .await?;
+        let _: () = self.conn.set(self.k_reserves(), payload).await?;
         Ok(())
     }
 
-    pub async fn set_state(&mut self, block: u64, anchor_px96: U256, fee_q48: u64) -> Result<()> {
+    pub async fn set_state(&mut self, block: u64, anchor_px96: u128, fee_q48: u64) -> Result<()> {
         let payload = serde_json::to_string(&UpdatesPayload {
             block,
             anchor_px96: anchor_px96.to_string(),
             fee: fee_q48.to_string(),
         })?;
-        let _: () = self.conn.set_ex(self.k_updates(), payload, UPD_TTL).await?;
+        let _: () = self.conn.set(self.k_updates(), payload).await?;
         Ok(())
     }
 
-    pub async fn set_sqrt_price(&mut self, sqrt_price_x96: U256) -> Result<()> {
+    pub async fn set_sqrt_price(&mut self, sqrt_price_x96: u128) -> Result<()> {
         let _: () = self
             .conn
-            .set_ex(self.k_sqrt_price(), sqrt_price_x96.to_string(), SQRT_TTL)
+            .set(self.k_sqrt_price(), sqrt_price_x96.to_string())
             .await?;
         Ok(())
     }
@@ -123,7 +114,7 @@ impl Cache {
 
     pub async fn apply_swap(
         &mut self,
-        sqrt_price_x96: U256,
+        sqrt_price_x96: u128,
         reserve_x: u128,
         reserve_y: u128,
     ) -> Result<()> {
@@ -131,8 +122,8 @@ impl Cache {
             serde_json::to_string(&ReservesPayload::from_pair(reserve_x, reserve_y))?;
         let _: () = redis::pipe()
             .atomic()
-            .set_ex(self.k_sqrt_price(), sqrt_price_x96.to_string(), SQRT_TTL)
-            .set_ex(self.k_reserves(), reserves_payload, RESERVES_TTL)
+            .set(self.k_sqrt_price(), sqrt_price_x96.to_string())
+            .set(self.k_reserves(), reserves_payload)
             .query_async(&mut self.conn)
             .await?;
         Ok(())
@@ -144,7 +135,7 @@ impl Cache {
     pub async fn apply_state_update(
         &mut self,
         block: u64,
-        anchor_px96: U256,
+        anchor_px96: u128,
         fee_q48: u64,
     ) -> Result<()> {
         let payload = serde_json::to_string(&UpdatesPayload {
@@ -154,8 +145,8 @@ impl Cache {
         })?;
         let _: () = redis::pipe()
             .atomic()
-            .set_ex(self.k_updates(), payload, UPD_TTL)
-            .set_ex(self.k_sqrt_price(), anchor_px96.to_string(), SQRT_TTL)
+            .set(self.k_updates(), payload)
+            .set(self.k_sqrt_price(), anchor_px96.to_string())
             .query_async(&mut self.conn)
             .await?;
         Ok(())
@@ -184,28 +175,40 @@ impl Cache {
         let block_delay = raw[4].as_ref();
         let paused = raw[5].as_ref();
 
-        let (Some(reserves), Some(updates)) = (reserves, updates) else {
+        let (Some(reserves), Some(updates), Some(concentration_k), Some(block_delay), Some(paused)) =
+            (reserves, updates, concentration_k, block_delay, paused)
+        else {
             return Ok(None);
         };
 
         let r: ReservesPayload = serde_json::from_str(reserves)?;
         let u: UpdatesPayload = serde_json::from_str(updates)?;
 
-        let reserve_x = parse_decimal_u128(&r.0).unwrap_or(0);
-        let reserve_y = parse_decimal_u128(&r.1).unwrap_or(0);
-        let anchor_px96 = parse_decimal_u256(&u.anchor_px96).unwrap_or(U256::ZERO);
-        let fee_q48 = u.fee.parse::<u64>().unwrap_or(0);
+        let reserve_x = parse_decimal_u128(&r.0).context("invalid cached reserveX")?;
+        let reserve_y = parse_decimal_u128(&r.1).context("invalid cached reserveY")?;
+        let anchor_px96 = parse_decimal_u128(&u.anchor_px96)
+            .context("cached anchorPX96 does not fit the math crate's u128 Q96 range")?;
+        let fee_q48 = u.fee.parse::<u64>().context("invalid cached Q48 fee")?;
 
-        let sqrt_price_x96 = sqrt_price
-            .and_then(|s| parse_decimal_u256(s))
-            .unwrap_or(anchor_px96);
+        let sqrt_price_x96 = match sqrt_price {
+            Some(value) => parse_decimal_u128(value)
+                .context("cached sqrtprice does not fit the math crate's u128 Q96 range")?,
+            None => anchor_px96,
+        };
 
         let concentration_k = concentration_k
-            .and_then(|s| s.parse::<u32>().ok())
-            .map(|k| k << 12) // legacy publishes plain uint32 K; math expects Q20.12
-            .unwrap_or(0);
-        let block_delay = block_delay.and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
-        let paused = paused.is_some_and(|s| s == "1");
+            .parse::<u32>()
+            .context("invalid cached concentrationK")?
+            .checked_mul(1 << 12) // legacy publishes plain K; math expects Q20.12
+            .context("cached concentrationK overflows Q20.12")?;
+        let block_delay = block_delay
+            .parse::<u64>()
+            .context("invalid cached blockDelay")?;
+        let paused = match paused.as_str() {
+            "0" => false,
+            "1" => true,
+            _ => return Err(eyre::eyre!("invalid cached paused flag")),
+        };
 
         Ok(Some(PoolState {
             sqrt_price_x96,

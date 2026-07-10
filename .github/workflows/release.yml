@@ -13,7 +13,8 @@ name: Release
 # The job graph is:
 #   publish-crates  ─────────────────────────────────────────────┐
 #                                                                ▼
-#   build-napi (matrix: macos-arm64, linux-x64) ─→ publish-npm
+#   build-napi (matrix: macos-arm64, linux-gnu, linux-musl)
+#       └─→ test-napi-musl (node:24-alpine) ─→ publish-npm
 
 on:
   push:
@@ -68,6 +69,9 @@ jobs:
           - host: ubuntu-latest       # cross-compile via zig (GitHub doesn't have arm64 Linux runners on free tier)
             target: aarch64-unknown-linux-gnu
             zig: true
+          - host: ubuntu-latest       # mpamm.wtf runs on node:24-alpine (musl)
+            target: x86_64-unknown-linux-musl
+            zig: true
     runs-on: ${{ matrix.host }}
     defaults:
       run:
@@ -83,14 +87,14 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: . -> ../../../target
+          workspaces: . -> target
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
 
       - name: Install npm deps
-        run: npm install --ignore-scripts
+        run: npm ci --ignore-scripts --omit=optional
 
       - name: Set up zig + cargo-zigbuild (cross-compile only)
         if: matrix.zig == true
@@ -109,9 +113,9 @@ jobs:
         # passed. For native targets (zig=false) we just call cargo directly.
         run: |
           if [ "${{ matrix.zig }}" = "true" ]; then
-            npx napi build --platform --release --target ${{ matrix.target }} --zig
+            CARGO_TARGET_DIR="${{ github.workspace }}/target" npx napi build --platform --release --target ${{ matrix.target }} --zig
           else
-            npx napi build --platform --release --target ${{ matrix.target }}
+            CARGO_TARGET_DIR="${{ github.workspace }}/target" npx napi build --platform --release --target ${{ matrix.target }}
           fi
         shell: bash
 
@@ -134,12 +138,40 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # A successful cross-link is not enough: optional native dependencies can be
+  # omitted silently and only fail at first import. Load the exact release
+  # artifact in the same musl runtime used by mpamm.wtf before publishing it.
+  test-napi-musl:
+    name: Test NAPI (linux-x64-musl on Alpine)
+    needs: build-napi
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: math/rust-node/lunarbase-pmm-math-node
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download musl artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-x86_64-unknown-linux-musl
+          path: math/rust-node/lunarbase-pmm-math-node/artifacts/musl
+
+      - name: Restore generated loader and native addon
+        run: |
+          cp artifacts/musl/index.cjs index.cjs
+          cp artifacts/musl/index.d.ts index.d.ts
+          cp artifacts/musl/lunarbase-pmm-math.linux-x64-musl.node .
+
+      - name: Run deterministic and fuzz-vector Node tests
+        run: docker run --rm --platform linux/amd64 -v "${{ github.workspace }}:/repo" -w /repo/math/rust-node/lunarbase-pmm-math-node node:24-alpine node --test test/quote.test.mjs
+
   # ──────────────────────────────────────────────────────────────────
   # npm: publish main package + per-platform sub-packages
   # ──────────────────────────────────────────────────────────────────
   publish-npm:
     name: Publish @lunarbase-lab/pmm-math to npm
-    needs: build-napi
+    needs: [build-napi, test-napi-musl]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -153,7 +185,7 @@ jobs:
           registry-url: https://registry.npmjs.org/
 
       - name: Install npm deps
-        run: npm install --ignore-scripts
+        run: npm ci --ignore-scripts --omit=optional
 
       - name: Download all artifacts (per-name subdirs preserved)
         # IMPORTANT: do NOT pass `merge-multiple: true`. `napi artifacts`
@@ -201,6 +233,7 @@ jobs:
           mv artifacts/bindings-aarch64-apple-darwin/lunarbase-pmm-math.darwin-arm64.node npm/darwin-arm64/
           mv artifacts/bindings-x86_64-unknown-linux-gnu/lunarbase-pmm-math.linux-x64-gnu.node npm/linux-x64-gnu/
           mv artifacts/bindings-aarch64-unknown-linux-gnu/lunarbase-pmm-math.linux-arm64-gnu.node npm/linux-arm64-gnu/
+          mv artifacts/bindings-x86_64-unknown-linux-musl/lunarbase-pmm-math.linux-x64-musl.node npm/linux-x64-musl/
 
       - name: Show final layout (AFTER napi artifacts)
         run: |

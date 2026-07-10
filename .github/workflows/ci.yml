@@ -123,6 +123,56 @@ jobs:
       - name: Build napi addon
         run: cargo zigbuild -p lunarbase-pmm-math-node --release --target ${{ matrix.target }}
 
+      - uses: actions/setup-node@v4
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        with:
+          node-version: 20
+
+      - name: Build loadable musl NAPI artifact
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        working-directory: math/rust-node/lunarbase-pmm-math-node
+        run: |
+          npm ci --ignore-scripts --omit=optional
+          CARGO_TARGET_DIR="${{ github.workspace }}/target" npx napi build --platform --release --target x86_64-unknown-linux-musl --zig
+          mv -f index.js index.cjs
+
+      - name: Upload musl runtime artifact
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-bindings-x86_64-unknown-linux-musl
+          path: |
+            math/rust-node/lunarbase-pmm-math-node/lunarbase-pmm-math.linux-x64-musl.node
+            math/rust-node/lunarbase-pmm-math-node/index.cjs
+            math/rust-node/lunarbase-pmm-math-node/index.d.ts
+          if-no-files-found: error
+          retention-days: 1
+
+  musl-runtime:
+    name: NAPI runtime (node:24-alpine)
+    runs-on: ubuntu-latest
+    needs: cross-build
+    defaults:
+      run:
+        working-directory: math/rust-node/lunarbase-pmm-math-node
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download musl artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ci-bindings-x86_64-unknown-linux-musl
+          path: math/rust-node/lunarbase-pmm-math-node/artifacts/musl
+
+      - name: Restore generated loader and native addon
+        run: |
+          cp artifacts/musl/index.cjs index.cjs
+          cp artifacts/musl/index.d.ts index.d.ts
+          cp artifacts/musl/lunarbase-pmm-math.linux-x64-musl.node .
+
+      - name: Run deterministic and fuzz-vector Node tests
+        run: docker run --rm --platform linux/amd64 -v "${{ github.workspace }}:/repo" -w /repo/math/rust-node/lunarbase-pmm-math-node node:24-alpine node --test test/quote.test.mjs
+
   examples:
     name: Examples smoke test
     runs-on: ubuntu-latest
@@ -139,6 +189,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Rust minimal example
         run: cargo run --manifest-path examples/minimal/rust/Cargo.toml
+      - name: Rust offchain quoting examples
+        run: cargo check --locked -p offchain-quoting-example-rust -p offchain-quoting-example-rust-legacy
       - name: Go minimal example
         run: |
           cd examples/minimal/go

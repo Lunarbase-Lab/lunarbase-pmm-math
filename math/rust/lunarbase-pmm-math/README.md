@@ -20,7 +20,9 @@ lunarbase-pmm-math = "0.2"
 ```
 
 ```rust
-use lunarbase_pmm_math::{plain_to_q12_concentration_k, quote_x_to_y, PoolParams, U256};
+use lunarbase_pmm_math::{
+    plain_to_q12_concentration_k, quote_x_to_y, quote_x_to_y_with_multiplier, PoolParams, U256,
+};
 
 let params = PoolParams {
     sqrt_price_x96: 1u128 << 96,            // price = 1.0
@@ -32,8 +34,20 @@ let params = PoolParams {
 };
 
 let r = quote_x_to_y(&params, U256::from(1_000_000_000_000_000_000u128));
+let non_whitelisted = quote_x_to_y_with_multiplier(
+    &params,
+    U256::from(1_000_000_000_000_000_000u128),
+    U256::from(100u64),
+);
 let _ = (r.amount_out, r.sqrt_price_next, r.fee);
+let _ = non_whitelisted.amount_out;
 ```
+
+`quote_x_to_y` and `quote_y_to_x` use `fee_multiplier = 1`, matching a
+whitelisted/base-fee caller. The public Pool `quoteXToY`/`quoteYToX` methods
+derive the multiplier from `msg.sender`; for a non-whitelisted caller, pass
+`pool.blacklistFeeMultiplier()` into `quote_x_to_y_with_multiplier` or
+`quote_y_to_x_with_multiplier`.
 
 ## API surface
 
@@ -42,6 +56,7 @@ let _ = (r.amount_out, r.sqrt_price_next, r.fee);
 | `PoolParams`                                                              | Snapshot fed to a quote.                             |
 | `QuoteResult { amount_out, sqrt_price_next, fee }`                        | `amount_out` is **net** of `fee`.                    |
 | `quote_x_to_y(params, dx)` / `quote_y_to_x(params, dy)`                   | Bit-exact mirrors of Solidity `SwapLib`.             |
+| `quote_x_to_y_with_multiplier(...)` / `quote_y_to_x_with_multiplier(...)` | Mirrors Pool quotes for caller-specific fee paths.   |
 | `price_to_sqrt_price_x96(price)` / `sqrt_price_x96_to_price(p)`           | `f64` decimal price ↔ Q64.96 sqrt-price.             |
 | `plain_to_q12_concentration_k(k)` / `q12_to_plain_concentration_k(k_q12)` | Plain `K` ↔ Q20.12 `concentration_k`.                |
 

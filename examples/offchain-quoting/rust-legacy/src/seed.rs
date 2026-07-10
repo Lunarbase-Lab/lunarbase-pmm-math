@@ -1,11 +1,11 @@
 use alloy::primitives::Address;
 use alloy::providers::{Provider, ProviderBuilder};
-use eyre::{Context, Result};
+use eyre::{Context, ContextCompat, Result};
 use tracing::info;
 
 use crate::abi::Pool;
 use crate::cache::Cache;
-use crate::pool_state::px96_to_u256;
+use crate::pool_state::px96_to_u128_checked;
 
 pub async fn seed_state(rpc_url: &str, pool: Address, cache: &mut Cache) -> Result<()> {
     let url = rpc_url.parse().context("bad RPC_URL")?;
@@ -23,7 +23,8 @@ pub async fn seed_state(rpc_url: &str, pool: Address, cache: &mut Cache) -> Resu
     let paused = contract.paused().call().await?._0;
 
     let p_x96 = state.pX96;
-    let p_x96_u = px96_to_u256(p_x96);
+    let p_x96_u = px96_to_u128_checked(p_x96)
+        .context("pX96 exceeds the math crate's supported u128 Q96 range")?;
     let fee_q48: u64 = state.fee.to();
     let latest_update_block: u64 = state.latestUpdateBlock.to();
 

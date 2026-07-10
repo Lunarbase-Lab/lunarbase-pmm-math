@@ -1,9 +1,11 @@
 #![allow(dead_code)]
 
 use eyre::Result;
-use lunarbase_pmm_math::{quote_x_to_y, quote_y_to_x, U256};
+use lunarbase_pmm_math::{quote_x_to_y_with_multiplier, quote_y_to_x_with_multiplier, U256};
 
 use crate::cache::Cache;
+
+const WHITELIST_FEE_MULTIPLIER: u64 = 1;
 
 #[derive(Debug, Clone)]
 pub struct Quote {
@@ -11,7 +13,7 @@ pub struct Quote {
     pub fee: U256,
     /// Q64.96 sqrt-price the swap would settle at. Informational only on
     /// the current math layer.
-    pub sqrt_price_next: U256,
+    pub sqrt_price_next: u128,
     pub head_block: u64,
     pub latest_update_block: u64,
     pub block_age: u64,
@@ -21,6 +23,8 @@ pub struct Quote {
 pub enum QuoteError {
     #[error("pool state not yet seeded")]
     NoState,
+    #[error("head block unavailable; refusing to quote against unverifiable freshness")]
+    NoHead,
     #[error("pool is paused")]
     Paused,
     #[error("price is stale: blockAge={block_age} blockDelay={block_delay}")]
@@ -39,7 +43,10 @@ pub async fn quote_exact_in(cache: &mut Cache, dx: U256, x_to_y: bool) -> Result
         return Err(QuoteError::Paused.into());
     }
 
-    let head = cache.get_head_block().await?.unwrap_or(0);
+    let head = cache
+        .get_head_block()
+        .await?
+        .ok_or_else(|| eyre::eyre!(QuoteError::NoHead))?;
     let block_age = head.saturating_sub(snap.latest_update_block);
 
     if !snap.is_fresh(head) {
@@ -51,13 +58,15 @@ pub async fn quote_exact_in(cache: &mut Cache, dx: U256, x_to_y: bool) -> Result
     }
 
     let params = snap.to_params();
+    // Legacy partner routes shown by this example are whitelisted.
+    let fee_multiplier = U256::from(WHITELIST_FEE_MULTIPLIER);
     let result = if x_to_y {
-        quote_x_to_y(&params, dx)
+        quote_x_to_y_with_multiplier(&params, dx, fee_multiplier)
     } else {
-        quote_y_to_x(&params, dx)
+        quote_y_to_x_with_multiplier(&params, dx, fee_multiplier)
     };
 
-    if result.amount_out.is_zero() && result.fee.is_zero() {
+    if result.amount_out.is_zero() {
         return Err(QuoteError::Rejected.into());
     }
 

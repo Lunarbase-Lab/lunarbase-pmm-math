@@ -1,12 +1,7 @@
 # Minimal examples
 
 Smallest end-to-end usage of `lunarbase-pmm-math` from each supported
-language. All three produce the same two-line output:
-
-```
-X->Y  in=10000  out=9974  fee=9  pNext=281474976710321
-Y->X  in=10000  out=9974  fee=9  pNext=281474976710991
-```
+language.
 
 Paths are relative to the repository root.
 
@@ -15,6 +10,17 @@ Paths are relative to the repository root.
 ```sh
 cargo run --manifest-path examples/minimal/rust/Cargo.toml
 ```
+
+The example pins the `0.2.5` API, uses Q64.96 state, and passes
+`fee_multiplier = 1` explicitly for the whitelisted aggregator path:
+
+```
+X->Y  in=10000  out=9990  fee=9  pNext=79228162514169890263886670022
+Y->X  in=10000  out=9990  fee=9  pNext=79228162514358784923201343240
+```
+
+`pNext` is the hypothetical settlement price returned by the quote; current
+Pool contracts do not persist it as their next anchor.
 
 The example crate has its own `Cargo.toml` and is excluded from the workspace.
 

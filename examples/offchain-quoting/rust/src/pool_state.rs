@@ -1,11 +1,13 @@
-use lunarbase_pmm_math::{PoolParams, U256};
+use alloy::primitives::aliases::U160;
+use lunarbase_pmm_math::PoolParams;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default)]
 pub struct PoolState {
-    /// Single sqrt-price in Q64.96 (uint160 on-chain). Only operator's `upd()`
-    /// changes this — swaps do not mutate it.
-    pub sqrt_price_x96: U256,
+    /// Operator-published anchor sqrt-price in Q64.96. The contract exposes a
+    /// uint160, while the current math crate accepts the supported u128 range.
+    /// Swaps do not mutate this value; their following `Sync` updates reserves.
+    pub sqrt_price_x96: u128,
     pub fee_ask_x24: u32,
     pub fee_bid_x24: u32,
     #[allow(dead_code)]
@@ -57,19 +59,16 @@ pub struct UpdatesPayload {
     pub fee_bid_x24: u32,
 }
 
-pub fn u256_to_u128_saturating(v: U256) -> u128 {
-    if v.bit_len() > 128 {
-        u128::MAX
-    } else {
-        let limbs = v.as_limbs();
-        ((limbs[1] as u128) << 64) | (limbs[0] as u128)
-    }
-}
-
 pub fn parse_decimal_u128(s: &str) -> Option<u128> {
     s.trim().parse::<u128>().ok()
 }
 
-pub fn parse_decimal_u256(s: &str) -> Option<U256> {
-    U256::from_str_radix(s.trim(), 10).ok()
+/// Convert the contract's uint160 Q96 value without truncation. Returning
+/// `None` is fail-closed: the math crate cannot quote values outside u128.
+pub fn u160_to_u128_checked(value: U160) -> Option<u128> {
+    let limbs = value.as_limbs();
+    if limbs[2] != 0 {
+        return None;
+    }
+    Some(((limbs[1] as u128) << 64) | limbs[0] as u128)
 }

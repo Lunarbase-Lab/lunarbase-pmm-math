@@ -1,24 +1,27 @@
 use eyre::Result;
-use lunarbase_pmm_math::{quote_x_to_y, quote_y_to_x, U256};
+use lunarbase_pmm_math::{quote_x_to_y_with_multiplier, quote_y_to_x_with_multiplier, U256};
 use tracing::{info, warn};
 
 use crate::abi::Pool;
 use crate::cache::Cache;
 use crate::pool_state::{u256_to_u128_saturating, PoolState};
 
+const WHITELIST_FEE_MULTIPLIER: u64 = 1;
+
 pub async fn apply(ev: &Pool::SwapExecuted, snap: &PoolState, cache: &mut Cache) -> Result<()> {
     let params = snap.to_params();
+    let fee_multiplier = U256::from(WHITELIST_FEE_MULTIPLIER);
     let (sqrt_price_next, gross_x_in, gross_y_in) = if ev.xToY {
-        let q = quote_x_to_y(&params, ev.dx);
-        if q.amount_out.is_zero() && q.fee.is_zero() {
+        let q = quote_x_to_y_with_multiplier(&params, ev.dx, fee_multiplier);
+        if q.amount_out.is_zero() {
             warn!("local quote_x_to_y rejected the on-chain swap; keeping prior state");
             return Ok(());
         }
         sanity_check_fee(q.fee, ev.fee);
         (q.sqrt_price_next, ev.dx, q.amount_out + q.fee)
     } else {
-        let q = quote_y_to_x(&params, ev.dy);
-        if q.amount_out.is_zero() && q.fee.is_zero() {
+        let q = quote_y_to_x_with_multiplier(&params, ev.dy, fee_multiplier);
+        if q.amount_out.is_zero() {
             warn!("local quote_y_to_x rejected the on-chain swap; keeping prior state");
             return Ok(());
         }

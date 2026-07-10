@@ -32,11 +32,19 @@ PoolParams {
 
 quote_x_to_y(params, dx) -> QuoteResult { amount_out, sqrt_price_next, fee }
 quote_y_to_x(params, dy) -> QuoteResult
+quote_x_to_y_with_multiplier(params, dx, fee_multiplier) -> QuoteResult
+quote_y_to_x_with_multiplier(params, dy, fee_multiplier) -> QuoteResult
 ```
 
 Names follow each language's conventions: `quote_x_to_y` (Rust), `QuoteXToY`
 (Go), `quoteXToY` (N-API). Big numbers cross the N-API boundary as decimal or
 `0x`-hex strings.
+
+The plain quote helpers use `fee_multiplier = 1`, matching the Pool's
+whitelisted/base-fee path. Public on-chain `quoteXToY`/`quoteYToX` derives the
+multiplier from `msg.sender`; for non-whitelisted callers, pass
+`pool.blacklistFeeMultiplier()` into the `*_with_multiplier` helpers (or the
+N-API `feeMultiplier` field) to compare against the same on-chain quote path.
 
 ### Helpers
 

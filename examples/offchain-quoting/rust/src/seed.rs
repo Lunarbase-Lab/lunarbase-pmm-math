@@ -1,11 +1,11 @@
 use alloy::primitives::Address;
 use alloy::providers::{Provider, ProviderBuilder};
-use eyre::{Context, Result};
-use lunarbase_pmm_math::U256 as PmmU256;
+use eyre::{Context, ContextCompat, Result};
 use tracing::info;
 
 use crate::abi::Pool;
 use crate::cache::Cache;
+use crate::pool_state::u160_to_u128_checked;
 
 pub async fn seed_state(rpc_url: &str, pool: Address, cache: &mut Cache) -> Result<()> {
     let url = rpc_url.parse().context("bad RPC_URL")?;
@@ -22,10 +22,8 @@ pub async fn seed_state(rpc_url: &str, pool: Address, cache: &mut Cache) -> Resu
     let delay: u64 = contract.blockDelay().call().await?._0.to();
     let paused = contract.paused().call().await?._0;
 
-    // anchorPrice is uint160 (Q64.96 sqrt-price). Convert via decimal string to
-    // PmmU256 so the cache stores it at full precision.
-    let anchor_price = PmmU256::from_str_radix(&state.anchorPrice.to_string(), 10)
-        .context("parse anchorPrice as U256")?;
+    let anchor_price = u160_to_u128_checked(state.anchorPrice)
+        .context("anchorPrice exceeds the math crate's supported u128 Q96 range")?;
     let fee_ask_x24: u32 = state.feeAskX24.to();
     let fee_bid_x24: u32 = state.feeBidX24.to();
     let latest_update_block: u64 = state.latestUpdateBlock.to();
@@ -34,7 +32,6 @@ pub async fn seed_state(rpc_url: &str, pool: Address, cache: &mut Cache) -> Resu
     cache
         .set_state(latest_update_block, anchor_price, fee_ask_x24, fee_bid_x24)
         .await?;
-    cache.set_sqrt_price(anchor_price).await?;
     cache.set_concentration_k(k).await?;
     cache.set_block_delay(delay).await?;
     cache.set_paused(paused).await?;

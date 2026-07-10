@@ -9,7 +9,9 @@
 //! # Quick start
 //!
 //! ```
-//! use lunarbase_pmm_math::{quote_x_to_y, PoolParams, U256};
+//! use lunarbase_pmm_math::{
+//!     plain_to_q12_concentration_k, quote_x_to_y, quote_x_to_y_with_multiplier, PoolParams, U256,
+//! };
 //!
 //! let params = PoolParams {
 //!     sqrt_price_x96: 1u128 << 96, // price = 1.0
@@ -17,10 +19,12 @@
 //!     fee_bid_x24: (1u32 << 24) / 1000, // 0.10% bid fee
 //!     reserve_x: 1_000_000,
 //!     reserve_y: 1_000_000,
-//!     concentration_k: 5_000,
+//!     concentration_k: plain_to_q12_concentration_k(5_000),
 //! };
 //! let result = quote_x_to_y(&params, U256::from(1_000u64));
+//! let non_whitelisted = quote_x_to_y_with_multiplier(&params, U256::from(1_000u64), U256::from(100u64));
 //! let _ = result.amount_out;
+//! let _ = non_whitelisted.amount_out;
 //! ```
 
 pub mod curve_pmm;
@@ -34,6 +38,7 @@ mod tests;
 
 pub use curve_pmm::{
     plain_to_q12_concentration_k, price_to_sqrt_price_x96, q12_to_plain_concentration_k,
-    quote_x_to_y, quote_y_to_x, sqrt_price_x96_to_price, PoolParams, QuoteResult,
+    quote_x_to_y, quote_x_to_y_with_multiplier, quote_y_to_x, quote_y_to_x_with_multiplier,
+    sqrt_price_x96_to_price, PoolParams, QuoteResult,
 };
 pub use uint256::{U256Ext, U256};

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct PoolState {
     /// Legacy pool publishes the sqrt-price in Q64.96 (uint160); the current
     /// math layer consumes the same encoding.
-    pub sqrt_price_x96: U256,
+    pub sqrt_price_x96: u128,
     /// Legacy build still carries a single Q48 fee that we approximately
     /// re-encode as a Q24 fee for the new asymmetric API by truncating the
     /// upper 24 bits. Real deployments must migrate to per-direction fees.
@@ -73,19 +73,12 @@ pub fn parse_decimal_u128(s: &str) -> Option<u128> {
     s.trim().parse::<u128>().ok()
 }
 
-pub fn parse_decimal_u256(s: &str) -> Option<U256> {
-    U256::from_str_radix(s.trim(), 10).ok()
-}
-
-/// Converts the legacy contract's `pX96` (alloy `U160`) into the `U256`
-/// representation expected by `lunarbase_pmm_math::PoolParams`. The math
-/// layer now stores sqrt-price in Q64.96 too, so this is just a width
-/// widening.
-pub fn px96_to_u256(p_x96: U160) -> U256 {
+/// Convert the legacy uint160 Q96 value without truncation. Returning `None`
+/// is fail-closed: the current math crate accepts the supported u128 range.
+pub fn px96_to_u128_checked(p_x96: U160) -> Option<u128> {
     let limbs = p_x96.as_limbs();
-    let mut out_limbs = [0u64; 4];
-    out_limbs[0] = limbs[0];
-    out_limbs[1] = limbs[1];
-    out_limbs[2] = limbs[2];
-    U256::from_limbs(out_limbs)
+    if limbs[2] != 0 {
+        return None;
+    }
+    Some(((limbs[1] as u128) << 64) | limbs[0] as u128)
 }

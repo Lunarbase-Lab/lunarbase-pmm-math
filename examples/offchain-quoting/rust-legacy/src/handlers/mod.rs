@@ -2,12 +2,12 @@ mod swap;
 
 use alloy::primitives::{keccak256, B256};
 use alloy::sol_types::SolEvent;
-use eyre::Result;
+use eyre::{ContextCompat, Result};
 use tracing::{debug, info, warn};
 
 use crate::abi::Pool;
 use crate::cache::Cache;
-use crate::pool_state::px96_to_u256;
+use crate::pool_state::px96_to_u128_checked;
 use crate::ws::types::LogEvent;
 use crate::ws::ChainEvent;
 
@@ -46,7 +46,8 @@ async fn handle_log(log: LogEvent, cache: &mut Cache) -> Result<()> {
         // implicitly resets the local swap-driven cache to the anchor.
         let ev = decode::<Pool::StateUpdated>(&log)?;
         let p_x96 = ev.state.pX96;
-        let p_x96_u = px96_to_u256(p_x96);
+        let p_x96_u = px96_to_u128_checked(p_x96)
+            .context("pX96 exceeds the math crate's supported u128 Q96 range")?;
         let fee: u64 = ev.state.fee.to();
         cache.apply_state_update(block, p_x96_u, fee).await?;
         info!(

@@ -2,12 +2,12 @@ mod swap;
 
 use alloy::primitives::{keccak256, B256};
 use alloy::sol_types::SolEvent;
-use eyre::{Context, Result};
-use lunarbase_pmm_math::U256 as PmmU256;
-use tracing::{debug, info, warn};
+use eyre::{ContextCompat, Result};
+use tracing::{debug, info};
 
 use crate::abi::Pool;
 use crate::cache::Cache;
+use crate::pool_state::u160_to_u128_checked;
 use crate::ws::types::LogEvent;
 use crate::ws::ChainEvent;
 
@@ -42,15 +42,11 @@ async fn handle_log(log: LogEvent, cache: &mut Cache) -> Result<()> {
 
     if topic0 == sig::<Pool::StateUpdated>() {
         let ev = decode::<Pool::StateUpdated>(&log)?;
-        // anchorPrice is uint160 (Q64.96 sqrt-price); marshal through the
-        // decimal-string representation to keep the full width.
-        let anchor = PmmU256::from_str_radix(&ev.anchorPrice.to_string(), 10)
-            .context("parse anchorPrice as U256")?;
+        let anchor = u160_to_u128_checked(ev.anchorPrice)
+            .context("anchorPrice exceeds the math crate's supported u128 Q96 range")?;
         let fee_ask: u32 = ev.feeAskX24.to();
         let fee_bid: u32 = ev.feeBidX24.to();
         cache.set_state(block, anchor, fee_ask, fee_bid).await?;
-        // pX96 also takes the new value on upd() (only operator-driven path).
-        cache.set_sqrt_price(anchor).await?;
         info!(
             block,
             anchor_price = %anchor,
@@ -66,11 +62,10 @@ async fn handle_log(log: LogEvent, cache: &mut Cache) -> Result<()> {
         info!(block, reserve_x = x, reserve_y = y, "Sync");
     } else if topic0 == sig::<Pool::SwapExecuted>() {
         let ev = decode::<Pool::SwapExecuted>(&log)?;
-        if let Some(snap) = cache.snapshot().await? {
-            swap::apply(&ev, &snap, cache).await?;
-        } else {
-            warn!("snapshot empty when applying SwapExecuted");
-        }
+        // Current pools emit an authoritative Sync before SwapExecuted. The
+        // hypothetical pNext returned by quote math is not persisted on-chain,
+        // so applying the swap again here would double-update the reserves.
+        swap::observe(&ev);
     } else if topic0 == sig::<Pool::ConcentrationKSet>() {
         let ev = decode::<Pool::ConcentrationKSet>(&log)?;
         cache.set_concentration_k(ev.concentrationK).await?;

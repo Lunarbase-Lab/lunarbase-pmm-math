@@ -19,8 +19,9 @@ platforms:
 | `@lunarbase-lab/pmm-math-darwin-arm64`     | macOS arm64        |
 | `@lunarbase-lab/pmm-math-linux-x64-gnu`    | Linux x64 (glibc)  |
 | `@lunarbase-lab/pmm-math-linux-arm64-gnu`  | Linux arm64 (glibc)|
+| `@lunarbase-lab/pmm-math-linux-x64-musl`   | Linux x64 (musl / Alpine) |
 
-Open an issue if you need musl, darwin-x64, or win32-x64.
+Open an issue if you need Linux arm64 musl, darwin-x64, or win32-x64.
 
 ## Usage
 
