@@ -104,12 +104,10 @@ Cut by `.github/workflows/release.yml` on a `v*` tag push. To release:
 #   - Cargo.toml [workspace.package].version
 #   - math/rust-node/lunarbase-pmm-math-node/package.json (.version and all .optionalDependencies)
 make publish-dry-run
-git commit -am "release v0.X.Y"
+git add -A
+git commit -m "release v0.X.Y"
 git tag v0.X.Y && git push origin v0.X.Y
 ```
-
-Required GitHub secrets: `CARGO_REGISTRY_TOKEN`, `NPM_TOKEN`
-(npm Automation token with publish on the `@lunarbase-lab` scope).
 
 ## License
 

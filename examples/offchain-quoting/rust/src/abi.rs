@@ -18,12 +18,16 @@ sol! {
         function paused() external view returns (bool);
         function getXReserve() external view returns (uint112);
         function getYReserve() external view returns (uint112);
+        function blacklistFeeMultiplier() external view returns (uint256);
+        function isWhitelisted(address account) external view returns (bool);
 
         event StateUpdated(uint160 anchorPrice, uint24 feeAskX24, uint24 feeBidX24);
         event Sync(uint128 reserveX, uint128 reserveY);
         event SwapExecuted(address recipient, bool xToY, uint256 dx, uint256 dy, uint256 fee);
         event ConcentrationKSet(uint32 concentrationK);
         event BlockDelaySet(uint48 blockDelay);
+        event WhitelistSet(address indexed account, bool whitelisted);
+        event BlacklistFeeMultiplierSet(uint256 multiplier);
         event Paused(address account);
         event Unpaused(address account);
     }

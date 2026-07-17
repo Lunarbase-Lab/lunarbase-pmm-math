@@ -1,6 +1,6 @@
 {
   "name": "@lunarbase-lab/pmm-math",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "description": "N-API binding exposing lunarbase-pmm-math to Node.js. Bit-exact mirror of the on-chain LunarBase Curve PMM quoting math.",
   "license": "MIT OR Apache-2.0",
   "type": "module",
@@ -53,10 +53,10 @@
     }
   },
   "optionalDependencies": {
-    "@lunarbase-lab/pmm-math-darwin-arm64": "0.2.5",
-    "@lunarbase-lab/pmm-math-linux-x64-gnu": "0.2.5",
-    "@lunarbase-lab/pmm-math-linux-arm64-gnu": "0.2.5",
-    "@lunarbase-lab/pmm-math-linux-x64-musl": "0.2.5"
+    "@lunarbase-lab/pmm-math-darwin-arm64": "0.2.6",
+    "@lunarbase-lab/pmm-math-linux-x64-gnu": "0.2.6",
+    "@lunarbase-lab/pmm-math-linux-arm64-gnu": "0.2.6",
+    "@lunarbase-lab/pmm-math-linux-x64-musl": "0.2.6"
   },
   "scripts": {
     "build": "CARGO_TARGET_DIR=target napi build --platform --release && mv -f index.js index.cjs",

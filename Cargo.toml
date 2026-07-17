@@ -3,14 +3,13 @@ members = [
     "math/rust/lunarbase-pmm-math",
     "math/rust-node/lunarbase-pmm-math-node",
     "examples/offchain-quoting/rust",
-    "examples/offchain-quoting/rust-legacy",
 ]
 exclude = ["examples/minimal"]
 resolver = "2"
 
 [workspace.package]
 edition = "2021"
-version = "0.2.5"
+version = "0.2.6"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Lunarbase-Lab/lunarbase-pmm-math"
 rust-version = "1.77"

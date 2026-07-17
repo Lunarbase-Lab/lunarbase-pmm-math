@@ -225,7 +225,7 @@ publish-dry-run: publish-crates-dry publish-npm-dry
 # Convenience target that bumps the npm package version, prints the next steps,
 # and exits without pushing anything. Use VERSION=X.Y.Z.
 release-tag:
-	@if [ -z "$(VERSION)" ]; then echo "usage: make release-tag VERSION=0.1.0"; exit 1; fi
+	@if [ -z "$(VERSION)" ]; then echo "usage: make release-tag VERSION=0.2.6"; exit 1; fi
 	@echo "  →  reminder: bump Cargo.toml [workspace.package].version to $(VERSION)"
 	@echo "  →  reminder: bump $(NODE_DIR)/package.json .version and .optionalDependencies"
 	@echo "  →  then: git tag v$(VERSION) && git push origin v$(VERSION)"

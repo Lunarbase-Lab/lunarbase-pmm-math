@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
   pull_request:
   workflow_dispatch:
 
@@ -190,7 +190,7 @@ jobs:
       - name: Rust minimal example
         run: cargo run --manifest-path examples/minimal/rust/Cargo.toml
       - name: Rust offchain quoting examples
-        run: cargo check --locked -p offchain-quoting-example-rust -p offchain-quoting-example-rust-legacy
+        run: cargo check --locked -p offchain-quoting-example-rust
       - name: Go minimal example
         run: |
           cd examples/minimal/go

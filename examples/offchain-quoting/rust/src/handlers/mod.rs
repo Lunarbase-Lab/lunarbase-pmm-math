@@ -7,7 +7,7 @@ use tracing::{debug, info};
 
 use crate::abi::Pool;
 use crate::cache::Cache;
-use crate::pool_state::u160_to_u128_checked;
+use crate::pool_state::{parse_decimal_u256, u160_to_u128_checked};
 use crate::ws::types::LogEvent;
 use crate::ws::ChainEvent;
 
@@ -75,6 +75,31 @@ async fn handle_log(log: LogEvent, cache: &mut Cache) -> Result<()> {
         let d: u64 = ev.blockDelay.to();
         cache.set_block_delay(d).await?;
         info!(block_delay = d, "BlockDelaySet");
+    } else if topic0 == sig::<Pool::WhitelistSet>() {
+        let ev = decode::<Pool::WhitelistSet>(&log)?;
+        if cache.is_quote_caller(ev.account) {
+            // Whitelist is keyed by msg.sender. Only update this quote cache
+            // when the event targets the exact router/adapter address that
+            // production swaps use to call the Pool.
+            cache.set_caller_whitelisted(ev.whitelisted).await?;
+            info!(
+                account = %ev.account,
+                whitelisted = ev.whitelisted,
+                "WhitelistSet for quote caller"
+            );
+        } else {
+            debug!(
+                account = %ev.account,
+                whitelisted = ev.whitelisted,
+                "WhitelistSet ignored for non-quote caller"
+            );
+        }
+    } else if topic0 == sig::<Pool::BlacklistFeeMultiplierSet>() {
+        let ev = decode::<Pool::BlacklistFeeMultiplierSet>(&log)?;
+        let multiplier = parse_decimal_u256(&ev.multiplier.to_string())
+            .context("BlacklistFeeMultiplierSet multiplier does not fit U256")?;
+        cache.set_blacklist_fee_multiplier(multiplier).await?;
+        info!(multiplier = %multiplier, "BlacklistFeeMultiplierSet");
     } else if topic0 == sig::<Pool::Paused>() {
         cache.set_paused(true).await?;
         info!("Paused");

@@ -1,0 +1,30 @@
+services:
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 1s
+      retries: 15
+    restart: unless-stopped
+
+  quoter:
+    build:
+      context: ../..
+      dockerfile: examples/offchain-quoting/rust/Dockerfile
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./rust/.env:/app/examples/offchain-quoting/rust/.env:ro
+    environment:
+      POOL_ADDRESS: ${POOL_ADDRESS:-0x0000eFC4ec03a7c47D3a38A9Be7Ff1d52dD01b99}
+      REDIS_URL: redis://redis:6379
+      REDIS_CONNECT_TIMEOUT_SECS: ${REDIS_CONNECT_TIMEOUT_SECS:-5}
+      QUOTE_CALLER_ADDRESS: ${QUOTE_CALLER_ADDRESS:-0x0000000000000000000000000000000000000000}
+      QUOTE_AMOUNT_IN: ${QUOTE_AMOUNT_IN:-1000000000000000}
+      QUOTE_DIRECTION: ${QUOTE_DIRECTION:-x_to_y}
+      QUOTE_INTERVAL_SECS: ${QUOTE_INTERVAL_SECS:-5}
+      SEED_TIMEOUT_SECS: ${SEED_TIMEOUT_SECS:-20}
+      RUST_LOG: ${QUOTER_RUST_LOG:-info,offchain_quoting_example_rust=debug}
+    restart: unless-stopped

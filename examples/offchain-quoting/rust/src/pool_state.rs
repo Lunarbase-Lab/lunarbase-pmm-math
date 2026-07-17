@@ -1,5 +1,5 @@
 use alloy::primitives::aliases::U160;
-use lunarbase_pmm_math::PoolParams;
+use lunarbase_pmm_math::{PoolParams, U256};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default)]
@@ -19,6 +19,16 @@ pub struct PoolState {
     pub block_delay: u64,
     #[allow(dead_code)]
     pub paused: bool,
+    /// Effective multiplier for the exact execution caller this quoter serves.
+    ///
+    /// This is caller-specific on-chain state: Pool.quote* checks msg.sender.
+    /// Keep one cache namespace per execution adapter/router that can call the
+    /// Pool directly. Do not infer this value from SwapExecuted.recipient.
+    pub fee_multiplier: U256,
+    #[allow(dead_code)]
+    pub caller_whitelisted: bool,
+    #[allow(dead_code)]
+    pub blacklist_fee_multiplier: U256,
 }
 
 impl PoolState {
@@ -61,6 +71,10 @@ pub struct UpdatesPayload {
 
 pub fn parse_decimal_u128(s: &str) -> Option<u128> {
     s.trim().parse::<u128>().ok()
+}
+
+pub fn parse_decimal_u256(s: &str) -> Option<U256> {
+    U256::from_str_radix(s.trim(), 10).ok()
 }
 
 /// Convert the contract's uint160 Q96 value without truncation. Returning
