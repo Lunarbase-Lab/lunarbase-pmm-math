@@ -1,181 +1,115 @@
 # lunarbase-pmm-math
 
-[![CI](https://github.com/lunarbase/lunarbase-pmm-math/actions/workflows/ci.yml/badge.svg)](https://github.com/lunarbase/lunarbase-pmm-math/actions/workflows/ci.yml)
+[![CI](https://github.com/Lunarbase-Lab/lunarbase-pmm-math/actions/workflows/ci.yml/badge.svg)](https://github.com/Lunarbase-Lab/lunarbase-pmm-math/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
-Reference implementations of the LunarBase Curve PMM quoting math, kept
-bit-for-bit identical with the on-chain Solidity contract.
+Reference implementations of the LunarBase Curve PMM quoting math —
+bit-for-bit identical with the on-chain Solidity contract, validated by
+shared JSONL test vectors.
 
 ## Layout
 
-| Path                                      | Crate / module                     | Purpose                                                                                         |
-| ----------------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `math/rust/lunarbase-pmm-math/`           | `lunarbase-pmm-math` (rlib)        | Pure Rust core. Portable, no `unsafe`, no FFI.                                                  |
-| `math/rust-node/lunarbase-pmm-math-node/` | `lunarbase-pmm-math-node` (cdylib) | N-API binding for Node.js. Native, OS+arch specific.                                            |
-| `math/go/`                                | `lunarbasepmm`                     | Pure Go mirror of the Rust public API.                                                          |
-| `examples/minimal/{rust,typescript,go}/`  | —                                  | Minimal end-to-end usage samples. See [examples/minimal/README.md](examples/minimal/README.md). |
-
-The Rust core and the Go mirror are validated against the same JSONL test
-vectors generated from the on-chain reference (`deterministic_vectors.jsonl`,
-`fuzz_vectors.jsonl`).
+| Path                                      | Crate / module               | Purpose                                  |
+| ----------------------------------------- | ---------------------------- | ---------------------------------------- |
+| `math/rust/lunarbase-pmm-math/`           | `lunarbase-pmm-math`         | Pure Rust core. Portable, no `unsafe`.   |
+| `math/rust-node/lunarbase-pmm-math-node/` | `lunarbase-pmm-math-node`    | N-API binding for Node.js (per OS/arch). |
+| `math/go/`                                | `lunarbasepmm`               | Pure Go mirror of the same API.          |
+| `examples/minimal/{rust,go,typescript}/`  | —                            | Smallest end-to-end usage per language.  |
 
 ## Public API
 
-All three implementations expose the same surface:
+Q64.96 sqrt-price (`uint160`) design, mirroring the current on-chain Pool:
 
 ```
-PoolParams { sqrt_price_x48, anchor_sqrt_price_x48, fee_q48,
-             reserve_x, reserve_y, concentration_k }
+PoolParams {
+    sqrt_price_x96,        // uint160, Q64.96 — operator-published sqrt-price
+    fee_ask_x24,           // uint24,  Q24 — fee on Y→X
+    fee_bid_x24,           // uint24,  Q24 — fee on X→Y
+    reserve_x,             // uint112
+    reserve_y,             // uint112
+    concentration_k,       // uint32,  Q20.12 (effective K = stored / 2^12)
+}
 
-QuoteResult { amount_out, sqrt_price_next, fee }
-
-quote_x_to_y(params, dx) -> QuoteResult
+quote_x_to_y(params, dx) -> QuoteResult { amount_out, sqrt_price_next, fee }
 quote_y_to_x(params, dy) -> QuoteResult
+quote_x_to_y_with_multiplier(params, dx, fee_multiplier) -> QuoteResult
+quote_y_to_x_with_multiplier(params, dy, fee_multiplier) -> QuoteResult
 ```
 
-Names follow each language's conventions (`QuoteXToY` in Go,
-`quote_x_to_y` in Rust, `quoteXToY` in the N-API binding).
+Names follow each language's conventions: `quote_x_to_y` (Rust), `QuoteXToY`
+(Go), `quoteXToY` (N-API). Big numbers cross the N-API boundary as decimal or
+`0x`-hex strings.
 
-## Requirements
+The plain quote helpers use `fee_multiplier = 1`, matching the Pool's
+whitelisted/base-fee path. Public on-chain `quoteXToY`/`quoteYToX` derives the
+multiplier from `msg.sender`; for non-whitelisted callers, pass
+`pool.blacklistFeeMultiplier()` into the `*_with_multiplier` helpers (or the
+N-API `feeMultiplier` field) to compare against the same on-chain quote path.
 
-- Rust 1.75+ (stable) with `cargo`
-- Go 1.22+
-- For cross-compilation: `zig` and `cargo-zigbuild` (see _Cross-compilation_)
-- For the Node.js binding: Node.js 18+ to load the produced `.node` file
+### Helpers
 
-Install all cross-compilation tooling in one command:
-
-```sh
-make setup-cross
-```
-
-This installs `zig` (via Homebrew on macOS), `cargo-zigbuild`, and adds the
-common `rustup` targets.
+| Rust                                  | Go                               | N-API / TS                       | Purpose                                                              |
+| ------------------------------------- | -------------------------------- | -------------------------------- | -------------------------------------------------------------------- |
+| `price_to_sqrt_price_x96(price)`      | `PriceToSqrtPriceX96(price)`     | `priceToSqrtPriceX96(price)`     | `f64` decimal price → Q64.96.                                        |
+| `sqrt_price_x96_to_price(p_x96)`      | `SqrtPriceX96ToPrice(pX96)`      | `sqrtPriceX96ToPrice(pX96)`      | Q64.96 → `f64` decimal price `(p/2^96)²`.                            |
+| same as above                         | —                                | `price_to_sqrt_price_x96(price)` / `sqrt_price_x96_to_price(pX96)` | N-API compatibility aliases for the X96 converter helpers. |
+| `plain_to_q12_concentration_k(k)`     | `PlainToQ12ConcentrationK(k)`    | `plainToQ12ConcentrationK(k)`    | Plain `K=100` → Q20.12 `409_600`.                                    |
+| `q12_to_plain_concentration_k(k_q12)` | `Q12ToPlainConcentrationK(kQ12)` | `q12ToPlainConcentrationK(kQ12)` | Q20.12 → plain `K` (truncates).                                      |
 
 ## Build & test
 
-The top-level `Makefile` is the single entry point.
-
 ```sh
-make            # build + test all three packages for the host
+make            # build + test all packages for the host
 make ci         # fmt-check + lint + test (matches CI)
-make build      # build only
-make test       # test only
-make clean      # clean all build artifacts
-make fmt        # format Rust + Go sources
-make lint       # cargo clippy + go vet
+make bench      # micro-bench rust + go (not run in CI; noise-sensitive)
 ```
 
-Per-package targets are also available: `rust-build`, `rust-test`,
-`node-build`, `node-test`, `go-build`, `go-test`, etc. Run `make -n <target>`
-to inspect the underlying command.
+Per-package targets: `rust-test`, `go-test`, `node-test`, etc. Run
+`make -n <target>` to inspect.
 
-## Benchmarks
-
-Micro-benchmarks for the quoting hot path live in
-`math/rust/lunarbase-pmm-math/benches/quote.rs` (criterion) and
-`math/go/quote_bench_test.go` (`testing.B`). Numbers and methodology are in
-[BENCHMARKS.md](BENCHMARKS.md).
-
-```sh
-make bench          # both
-make bench-rust     # criterion
-make bench-go       # testing.B with -benchmem
-```
-
-Bench jobs are not run in CI — they are too noise-sensitive on shared runners.
+Requirements: Rust 1.75+, Go 1.22+, Node.js 18+ (for the binding only).
 
 ## Cross-compilation
 
-Cross-compilation uses [`cargo-zigbuild`][zigbuild], which links through
-`zig cc`. **No Docker or VM is required**; everything runs on the host.
-
-[zigbuild]: https://github.com/rust-cross/cargo-zigbuild
-
-### Rust core
+Uses [`cargo-zigbuild`](https://github.com/rust-cross/cargo-zigbuild) — no
+Docker. Install tooling once with `make setup-cross`, then:
 
 ```sh
 make rust-cross TARGET=aarch64-unknown-linux-gnu
-make rust-cross TARGET=x86_64-unknown-linux-gnu.2.17    # pin minimum glibc
-make rust-cross TARGET=x86_64-unknown-linux-musl        # static, for Alpine
+make node-cross-all           # all per-platform .node addons in one go
+make go-cross-all             # standard Go cross-build, zig not needed
 ```
 
-### N-API binding
-
-```sh
-make node-cross-linux-x64
-make node-cross-linux-arm64
-make node-cross-linux-musl
-make node-cross-mac-x64
-make node-cross-mac-arm64
-make node-cross-mac-universal     # fat binary (x86_64 + arm64)
-make node-cross-all               # everything above, in one command
-```
-
-Output paths follow `target/<triple>/release/liblunarbase_pmm_math_node.{so,dylib}`.
-Rename the resulting library to `.node` before loading from Node.js, or use
-[`@napi-rs/cli`][napi-cli] to publish per-platform npm packages.
-
-[napi-cli]: https://napi.rs/docs/cli/build
-
-Windows targets are not currently supported by `cargo-zigbuild`; build the
-addon on a Windows runner (e.g. GitHub Actions `windows-latest`) instead.
-
-### Go package
-
-The Go mirror has no native dependencies and cross-compiles with the standard
-toolchain — `zig` is not needed.
-
-```sh
-make go-cross-linux-amd64
-make go-cross-linux-arm64
-make go-cross-darwin-amd64
-make go-cross-darwin-arm64
-make go-cross-windows-amd64
-make go-cross-all
-```
-
-## Platform notes
-
-| Package                   | OS-/arch-dependent? | Notes                                                                    |
-| ------------------------- | ------------------- | ------------------------------------------------------------------------ |
-| `rust/lunarbase-pmm-math` | No                  | Pure Rust on `ruint`. Identical artifact across platforms.               |
-| `go/`                     | No                  | Pure Go on `holiman/uint256`. CGO not used.                              |
-| `rust-node/...`           | **Yes**             | Produces `.so`/`.dylib` per (os, arch). Standard for Node native addons. |
+Windows targets are not supported by `cargo-zigbuild`; build the Node addon on
+a Windows runner instead.
 
 ## Test vectors
 
-The same JSONL vectors live in:
+Identical JSONL vectors live in `math/rust/lunarbase-pmm-math/{deterministic,fuzz}_vectors.jsonl`
+and `math/go/testdata/`. Both implementations replay every vector and assert
+bit-exact equality with the on-chain reference. Regenerate from the Foundry
+suite; update both copies.
 
-- `math/rust/lunarbase-pmm-math/deterministic_vectors.jsonl`
-- `math/rust/lunarbase-pmm-math/fuzz_vectors.jsonl`
-- `math/go/testdata/deterministic_vectors.jsonl`
-- `math/go/testdata/fuzz_vectors.jsonl`
+## Releases
 
-Both implementations replay every vector and assert bit-exact equality with
-the on-chain reference. When regenerating vectors from Solidity, update both
-locations.
+| Registry  | Package                   | Install                            |
+| --------- | ------------------------- | ---------------------------------- |
+| crates.io | `lunarbase-pmm-math`      | `cargo add lunarbase-pmm-math`     |
+| npm       | `@lunarbase-lab/pmm-math` | `npm install @lunarbase-lab/pmm-math` |
+
+Cut by `.github/workflows/release.yml` on a `v*` tag push. To release:
+
+```sh
+# bump versions in:
+#   - Cargo.toml [workspace.package].version
+#   - math/rust-node/lunarbase-pmm-math-node/package.json (.version and all .optionalDependencies)
+make publish-dry-run
+git add -A
+git commit -m "release v0.X.Y"
+git tag v0.X.Y && git push origin v0.X.Y
+```
 
 ## License
 
-Dual-licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT license ([LICENSE-MIT](LICENSE-MIT))
-
-at your option. Unless you explicitly state otherwise, any contribution
-intentionally submitted for inclusion in this work shall be dual-licensed as
-above, without any additional terms or conditions.
-
-## Adding a Rust target
-
-Any triple supported by `rustc` and `zig` works. Add it to your toolchain
-once:
-
-```sh
-rustup target add <triple>
-make rust-cross TARGET=<triple>
-```
-
-To make it a first-class `make` target, append a recipe to the relevant
-`*-cross-*` block in the `Makefile`.
+Dual-licensed under [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT) at your
+option.

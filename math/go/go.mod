@@ -1,4 +1,4 @@
-module github.com/lunarbase/lunarbase-pmm-math/math/go
+module github.com/Lunarbase-Lab/lunarbase-pmm-math/math/go
 
 go 1.22
 

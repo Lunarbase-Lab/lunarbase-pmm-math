@@ -1,0 +1,257 @@
+name: Release
+
+# Publishes the pure-Rust crate to crates.io and the N-API binding to npm
+# in a single run, gated on a `v*` tag (e.g. `v0.2.6`).
+#
+# Required repo secrets:
+#   - CARGO_REGISTRY_TOKEN  → crates.io API token (https://crates.io/me)
+#   - NPM_TOKEN             → npm Automation token with publish on @lunarbase-lab scope
+#
+# Trigger:
+#   git tag v0.2.6 && git push --tags
+#
+# The job graph is:
+#   publish-crates  ─────────────────────────────────────────────┐
+#                                                                ▼
+#   build-napi (matrix: macos-arm64, linux-gnu, linux-musl)
+#       └─→ test-napi-musl (node:24-alpine) ─→ publish-npm
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────
+  # crates.io: pure Rust core
+  # ──────────────────────────────────────────────────────────────────
+  publish-crates:
+    name: Publish lunarbase-pmm-math to crates.io
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo publish (dry-run)
+        run: cargo publish -p lunarbase-pmm-math --dry-run
+
+      - name: cargo publish
+        # `continue-on-error: true` lets re-runs of the same tag pass: the
+        # second `cargo publish` will fail with "version already published"
+        # but that's expected and we don't want it to block the npm pipeline
+        # (which has its own `needs: build-napi` chain).
+        continue-on-error: true
+        run: cargo publish -p lunarbase-pmm-math --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # ──────────────────────────────────────────────────────────────────
+  # NAPI: build per-platform binaries
+  # ──────────────────────────────────────────────────────────────────
+  build-napi:
+    name: Build NAPI (${{ matrix.target }})
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - host: macos-14            # macOS-arm64 native runner
+            target: aarch64-apple-darwin
+            zig: false
+          - host: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            zig: false
+          - host: ubuntu-latest       # cross-compile via zig (GitHub doesn't have arm64 Linux runners on free tier)
+            target: aarch64-unknown-linux-gnu
+            zig: true
+          - host: ubuntu-latest       # mpamm.wtf runs on node:24-alpine (musl)
+            target: x86_64-unknown-linux-musl
+            zig: true
+    runs-on: ${{ matrix.host }}
+    defaults:
+      run:
+        working-directory: math/rust-node/lunarbase-pmm-math-node
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install npm deps
+        run: npm ci --ignore-scripts --omit=optional
+
+      - name: Set up zig + cargo-zigbuild (cross-compile only)
+        if: matrix.zig == true
+        uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Install cargo-zigbuild
+        if: matrix.zig == true
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Build .node binary
+        # napi-rs CLI auto-detects cargo-zigbuild and uses it when --zig is
+        # passed. For native targets (zig=false) we just call cargo directly.
+        run: |
+          if [ "${{ matrix.zig }}" = "true" ]; then
+            CARGO_TARGET_DIR="${{ github.workspace }}/target" npx napi build --platform --release --target ${{ matrix.target }} --zig
+          else
+            CARGO_TARGET_DIR="${{ github.workspace }}/target" npx napi build --platform --release --target ${{ matrix.target }}
+          fi
+        shell: bash
+
+      - name: Rename auto-generated index.js → index.cjs
+        run: mv -f index.js index.cjs
+
+      - name: Upload .node + js metadata
+        # `napi artifacts` looks for files at `artifacts/bindings-<triple>/`;
+        # the artifact name MUST be exactly `bindings-${triple}` (full Rust
+        # triple, not napi short form) for the move step to find them.
+        # index.cjs/index.d.ts are identical across targets (auto-generated
+        # platform-detection code + TS types) and ride along for free.
+        uses: actions/upload-artifact@v4
+        with:
+          name: bindings-${{ matrix.target }}
+          path: |
+            math/rust-node/lunarbase-pmm-math-node/lunarbase-pmm-math.*.node
+            math/rust-node/lunarbase-pmm-math-node/index.cjs
+            math/rust-node/lunarbase-pmm-math-node/index.d.ts
+          if-no-files-found: error
+          retention-days: 1
+
+  # A successful cross-link is not enough: optional native dependencies can be
+  # omitted silently and only fail at first import. Load the exact release
+  # artifact in the same musl runtime used by mpamm.wtf before publishing it.
+  test-napi-musl:
+    name: Test NAPI (linux-x64-musl on Alpine)
+    needs: build-napi
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: math/rust-node/lunarbase-pmm-math-node
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download musl artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bindings-x86_64-unknown-linux-musl
+          path: math/rust-node/lunarbase-pmm-math-node/artifacts/musl
+
+      - name: Restore generated loader and native addon
+        run: |
+          cp artifacts/musl/index.cjs index.cjs
+          cp artifacts/musl/index.d.ts index.d.ts
+          cp artifacts/musl/lunarbase-pmm-math.linux-x64-musl.node .
+
+      - name: Run deterministic and fuzz-vector Node tests
+        run: docker run --rm --platform linux/amd64 -v "${{ github.workspace }}:/repo" -w /repo/math/rust-node/lunarbase-pmm-math-node node:24-alpine node --test test/quote.test.mjs
+
+  # ──────────────────────────────────────────────────────────────────
+  # npm: publish main package + per-platform sub-packages
+  # ──────────────────────────────────────────────────────────────────
+  publish-npm:
+    name: Publish @lunarbase-lab/pmm-math to npm
+    needs: [build-napi, test-napi-musl]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: math/rust-node/lunarbase-pmm-math-node
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org/
+
+      - name: Install npm deps
+        run: npm ci --ignore-scripts --omit=optional
+
+      - name: Download all artifacts (per-name subdirs preserved)
+        # IMPORTANT: do NOT pass `merge-multiple: true`. `napi artifacts`
+        # walks `artifacts/bindings-<full-triple>/` per the napi-rs convention;
+        # flattening the layout breaks the move step.
+        uses: actions/download-artifact@v4
+        with:
+          path: math/rust-node/lunarbase-pmm-math-node/artifacts
+          pattern: bindings-*
+
+      - name: Show downloaded layout (BEFORE napi artifacts)
+        # Critical diagnostic step: napi artifacts expects exactly
+        #   ./artifacts/bindings-<full-rust-triple>/<binary>.<short-abi>.node
+        # If this listing doesn't show a `.node` file inside each
+        # bindings-<triple>/ subdir, the upload-artifact step is the culprit.
+        run: |
+          echo "=== pwd ==="
+          pwd
+          echo "=== artifacts/ tree ==="
+          ls -laR artifacts/ || echo "artifacts/ missing"
+          echo "=== package.json napi config ==="
+          node -e "console.log(JSON.stringify(require('./package.json').napi, null, 2))"
+
+      - name: Restore js metadata to package root
+        # index.cjs/index.d.ts ride inside every per-platform artifact and
+        # are byte-identical (auto-generated platform-loader + TS types).
+        # Pull them from any one artifact directory.
+        run: |
+          cp artifacts/bindings-x86_64-unknown-linux-gnu/index.cjs index.cjs
+          cp artifacts/bindings-x86_64-unknown-linux-gnu/index.d.ts index.d.ts
+
+      - name: Generate per-triple npm/<abi>/ skeleton (package.json + README)
+        # `napi prepublish` reads npm/<abi>/package.json to know what to ship
+        # per platform; it does NOT create those files itself.
+        # `napi create-npm-dir` (singular!) reads `napi.triples.additional`
+        # from the main package.json and generates one subdir per triple.
+        # `-t .` means "output base dir = cwd" → produces ./npm/<abi>/.
+        run: npx napi create-npm-dir -t .
+
+      - name: Move .node files into npm/<short-abi>/
+        # We do this manually instead of `napx napi artifacts` because the
+        # latter errors with ENOENT on this layout. One-line `mv` per
+        # platform is explicit and easy to debug.
+        run: |
+          mv artifacts/bindings-aarch64-apple-darwin/lunarbase-pmm-math.darwin-arm64.node npm/darwin-arm64/
+          mv artifacts/bindings-x86_64-unknown-linux-gnu/lunarbase-pmm-math.linux-x64-gnu.node npm/linux-x64-gnu/
+          mv artifacts/bindings-aarch64-unknown-linux-gnu/lunarbase-pmm-math.linux-arm64-gnu.node npm/linux-arm64-gnu/
+          mv artifacts/bindings-x86_64-unknown-linux-musl/lunarbase-pmm-math.linux-x64-musl.node npm/linux-x64-musl/
+
+      - name: Show final layout (AFTER napi artifacts)
+        run: |
+          echo "=== package root ==="
+          ls -la
+          echo "=== npm/ tree ==="
+          ls -laR npm/ || true
+
+      - name: Publish to npm
+        # `npm publish` triggers `prepublishOnly` (= `napi prepublish -t npm
+        # --skip-gh-release`), which generates per-triple package.json files,
+        # publishes each sub-package via `npm publish` from its dir, and
+        # rewrites the main package's `optionalDependencies`. After the
+        # script returns, the outer `npm publish` finishes by uploading the
+        # main package. One step does it all.
+        run: |
+          echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
+          npm publish --access public
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

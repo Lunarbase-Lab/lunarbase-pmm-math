@@ -1,21 +1,26 @@
 //! N-API binding exposing [`lunarbase_pmm_math`] to Node.js.
+//!
+//! Public surface is Q64.96 (`uint160`) sqrt-price to match the current
+//! on-chain Pool math.
 #![allow(
     missing_docs,
     clippy::needless_pass_by_value,
     clippy::missing_safety_doc
 )]
 
-use lunarbase_pmm_math::curve_pmm::{self, PoolParams, QuoteResult as InternalQuoteResult};
+use lunarbase_pmm_math::curve_pmm::{
+    self, plain_to_q12_concentration_k, price_to_sqrt_price_x96, q12_to_plain_concentration_k,
+    sqrt_price_x96_to_price, PoolParams, QuoteResult as InternalQuoteResult,
+};
 use lunarbase_pmm_math::uint256::{U256Ext, U256};
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
 
-/// Parse a BigInt-compatible string (decimal or 0x hex) into U256.
 fn parse_u256(s: &str) -> Result<U256> {
     if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
         let bytes = hex_mod::decode_padded(hex)?;
         let mut limbs = [0u8; 32];
-        let offset = (32usize).saturating_sub(bytes.len());
+        let offset = 32usize.saturating_sub(bytes.len());
         limbs[offset..offset + bytes.len()].copy_from_slice(&bytes);
         Ok(U256::from_be_bytes(limbs))
     } else {
@@ -38,8 +43,7 @@ fn parse_decimal_u256(s: &str) -> Result<U256> {
 }
 
 mod hex_mod {
-    use napi::Error;
-    use napi::Result;
+    use napi::{Error, Result};
 
     pub(super) fn decode_padded(hex: &str) -> Result<Vec<u8>> {
         let hex = if hex.len() % 2 == 1 {
@@ -74,11 +78,9 @@ fn u256_to_string(v: U256) -> String {
     if v.is_zero() {
         return "0".to_owned();
     }
-
     if v <= U256::from(u128::MAX) {
         return v.as_u128().to_string();
     }
-
     let mut digits = Vec::new();
     let mut remaining = v;
     let ten = U256::from(10u64);
@@ -99,68 +101,68 @@ fn parse_u128_field(s: &str) -> Result<u128> {
     Ok(v.as_u128())
 }
 
-fn parse_u80_field(s: &str) -> Result<u128> {
-    let v = parse_u256(s)?;
-    if !v.fits_u80() {
+fn parse_u24_field(name: &str, value: u32) -> Result<u32> {
+    if value > (1u32 << 24) - 1 {
         return Err(Error::from_reason(format!(
-            "value too large for uint80: {s}"
+            "{name} exceeds uint24 range: {value}"
         )));
     }
-    Ok(v.as_u128())
+    Ok(value)
 }
 
 #[napi(object)]
 pub struct QuoteParams {
-    /// sqrtPriceX48 as decimal or hex string
-    pub sqrt_price_x48: String,
-    /// anchor sqrtPriceX48 as decimal or hex string. Defaults to sqrtPriceX48 when omitted by callers compiled against older API.
-    pub anchor_sqrt_price_x48: Option<String>,
-    /// fee in Q48 as decimal or hex string
-    pub fee_q48: String,
-    /// reserve X as decimal or hex string
+    /// sqrtPriceX96 as decimal or hex string.
+    pub sqrt_price_x96: String,
+    /// fee charged on Y -> X swaps in Q24 (uint24).
+    pub fee_ask_x24: u32,
+    /// fee charged on X -> Y swaps in Q24 (uint24).
+    pub fee_bid_x24: u32,
+    /// reserve X as decimal or hex string.
     pub reserve_x: String,
-    /// reserve Y as decimal or hex string
+    /// reserve Y as decimal or hex string.
     pub reserve_y: String,
-    /// concentration multiplier k
+    /// concentration multiplier in Q20.12 (uint32).
     pub concentration_k: u32,
-    /// input amount as decimal or hex string
+    /// input amount as decimal or hex string.
     pub amount_in: String,
+    /// optional fee multiplier as decimal or hex string. Defaults to 1.
+    pub fee_multiplier: Option<String>,
 }
 
 #[napi(object)]
 pub struct QuoteResult {
     /// output amount as decimal string
     pub amount_out: String,
-    /// new sqrt price as decimal string
+    /// new Q64.96 sqrt price as decimal string
     pub sqrt_price_next: String,
     /// fee amount as decimal string
     pub fee: String,
 }
 
-fn to_pool_params(p: &QuoteParams) -> Result<(PoolParams, U256)> {
-    let sqrt_price = parse_u80_field(&p.sqrt_price_x48)?;
-    let anchor_sqrt_price = match &p.anchor_sqrt_price_x48 {
-        Some(anchor) => parse_u80_field(anchor)?,
-        None => sqrt_price,
-    };
-    let fee_q48_val = parse_u128_field(&p.fee_q48)?;
-    if fee_q48_val > u128::from(u64::MAX) {
-        return Err(Error::from_reason("fee_q48 exceeds u48"));
-    }
+fn to_pool_params(p: &QuoteParams) -> Result<(PoolParams, U256, U256)> {
+    let sqrt_price_x96 = parse_u128_field(&p.sqrt_price_x96)?;
+    let fee_ask_x24 = parse_u24_field("fee_ask_x24", p.fee_ask_x24)?;
+    let fee_bid_x24 = parse_u24_field("fee_bid_x24", p.fee_bid_x24)?;
     let reserve_x = parse_u128_field(&p.reserve_x)?;
     let reserve_y = parse_u128_field(&p.reserve_y)?;
     let amount_in = parse_u256(&p.amount_in)?;
+    let fee_multiplier = match &p.fee_multiplier {
+        Some(v) => parse_u256(v)?,
+        None => U256::from(1u64),
+    };
 
     Ok((
         PoolParams {
-            sqrt_price_x48: sqrt_price,
-            anchor_sqrt_price_x48: anchor_sqrt_price,
-            fee_q48: fee_q48_val as u64,
+            sqrt_price_x96,
+            fee_ask_x24,
+            fee_bid_x24,
             reserve_x,
             reserve_y,
             concentration_k: p.concentration_k,
         },
         amount_in,
+        fee_multiplier,
     ))
 }
 
@@ -174,14 +176,46 @@ fn from_internal_result(r: InternalQuoteResult) -> QuoteResult {
 
 #[napi(js_name = "quoteXToY")]
 pub fn quote_x_to_y_napi(params: QuoteParams) -> Result<QuoteResult> {
-    let (pool, amount_in) = to_pool_params(&params)?;
-    let result = curve_pmm::quote_x_to_y(&pool, amount_in);
-    Ok(from_internal_result(result))
+    let (pool, amount_in, fee_multiplier) = to_pool_params(&params)?;
+    Ok(from_internal_result(
+        curve_pmm::quote_x_to_y_with_multiplier(&pool, amount_in, fee_multiplier),
+    ))
 }
 
 #[napi(js_name = "quoteYToX")]
 pub fn quote_y_to_x_napi(params: QuoteParams) -> Result<QuoteResult> {
-    let (pool, amount_in) = to_pool_params(&params)?;
-    let result = curve_pmm::quote_y_to_x(&pool, amount_in);
-    Ok(from_internal_result(result))
+    let (pool, amount_in, fee_multiplier) = to_pool_params(&params)?;
+    Ok(from_internal_result(
+        curve_pmm::quote_y_to_x_with_multiplier(&pool, amount_in, fee_multiplier),
+    ))
+}
+
+#[napi(js_name = "plainToQ12ConcentrationK")]
+pub fn plain_to_q12_concentration_k_napi(k: u32) -> u32 {
+    plain_to_q12_concentration_k(k)
+}
+
+#[napi(js_name = "q12ToPlainConcentrationK")]
+pub fn q12_to_plain_concentration_k_napi(k_q12: u32) -> u32 {
+    q12_to_plain_concentration_k(k_q12)
+}
+
+#[napi(js_name = "priceToSqrtPriceX96")]
+pub fn price_to_sqrt_price_x96_napi(price: f64) -> Result<String> {
+    Ok(price_to_sqrt_price_x96(price).to_string())
+}
+
+#[napi(js_name = "price_to_sqrt_price_x96")]
+pub fn price_to_sqrt_price_x96_compat_napi(price: f64) -> Result<String> {
+    price_to_sqrt_price_x96_napi(price)
+}
+
+#[napi(js_name = "sqrtPriceX96ToPrice")]
+pub fn sqrt_price_x96_to_price_napi(p_x96: String) -> Result<f64> {
+    Ok(sqrt_price_x96_to_price(parse_u128_field(&p_x96)?))
+}
+
+#[napi(js_name = "sqrt_price_x96_to_price")]
+pub fn sqrt_price_x96_to_price_compat_napi(p_x96: String) -> Result<f64> {
+    sqrt_price_x96_to_price_napi(p_x96)
 }

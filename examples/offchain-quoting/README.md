@@ -2,143 +2,177 @@
 
 End-to-end Rust reference for partners who want to quote against a LunarBase
 Pool **off-chain** with sub-block latency. The example connects to a Base
-[flashblocks](https://docs.base.org/) node, mirrors the on-chain pool state in
-Redis, and computes quotes through [`lunarbase-pmm-math`](../../math/rust/lunarbase-pmm-math)
-— the same math the on-chain contract uses, bit-for-bit.
+[flashblocks](https://docs.base.org/) node, mirrors the on-chain pool state
+in Redis, and computes quotes through
+[`lunarbase-pmm-math`](../../math/rust/lunarbase-pmm-math) — bit-for-bit
+identical with the current on-chain math for the effective fee multiplier and
+the crate's supported `u128` Q96 anchor range.
 
-> The examples in this directory only depend on **public** contract views,
-> events, and the public `lunarbase-pmm-math` crate. There is nothing in here
-> about how the operator publishes the anchor price; partners do not need to
-> reproduce that — they just consume `StateUpdated` events.
+> Only depends on **public** contract views, events, and the public
+> `lunarbase-pmm-math` crate. Partners consume `StateUpdated` events; they do
+> not reproduce the operator's anchor-price computation.
 
 ## Layout
 
-| Path                           | Crate                                  | Targets                                                                                    |
-| ------------------------------ | -------------------------------------- | ------------------------------------------------------------------------------------------ |
-| [`rust/`](rust/)               | `offchain-quoting-example-rust`        | the **current** Pool ABI (`uint80 pX48`, separate `anchorPrice()` view)                    |
-| [`rust-legacy/`](rust-legacy/) | `offchain-quoting-example-rust-legacy` | the **legacy** Pool ABI (`uint160 pX96`, no `anchorPrice()`); converts Q96 → Q48 at ingest |
+| Path                           | Crate                                  | Targets                                          |
+| ------------------------------ | -------------------------------------- | ------------------------------------------------ |
+| [`rust/`](rust/)               | `offchain-quoting-example-rust`        | Current Pool ABI (`anchorPrice` Q96, asym fees)  |
 
-Both crates are members of the workspace and share the same module layout.
-Pick whichever matches the contract version you are integrating against.
+The current example is the integration target.
 
-## What the example does
+## What it does
 
-1. **Seed** initial pool state from an HTTP RPC (`getXReserve`, `getYReserve`,
-   `state()`, `anchorPrice()`, `concentrationK()`, `blockDelay()`, `paused()`).
-2. **Subscribe** over WebSocket to three streams:
-   - `newHeads` — confirmed block tip (drives `blockAge` / freshness).
-   - `newFlashblocks` — Base pre-confirmation block updates (~200 ms cadence).
-   - `pendingLogs` filtered by the pool address — pending event logs from the
-     contract before the block is finalized.
-3. **Apply contract events** to the cached pool state in Redis:
-   - `Sync(reserveX, reserveY)` — atomically replaces cached reserves.
-   - `SwapExecuted(recipient, xToY, dx, dy, fee)` — locally projects the swap
-     through `lunarbase_pmm_math::quote_x_to_y` / `quote_y_to_x`,
-     atomically updates `sqrt_price_x48` and increments reserves by the gross
-     deltas. Sanity-checks the local `fee` against the on-chain `fee`.
-   - `StateUpdated((anchor, fee))` — refreshes operator anchor and fee
-     (legacy variant additionally resets `sqrt_price_x48` to the new anchor,
-     mirroring the contract's single-slot semantics).
-   - `ConcentrationKSet`, `BlockDelaySet`, `Paused`, `Unpaused` — cached.
-4. **Deduplicate** logs that the flashblocks node re-emits across pre-confirmation
-   snapshots: the dedup key is `(blockNumber, transactionHash, logIndex)`,
-   falling back to `keccak256(blockNumber ‖ topic0 ‖ data)` when the node
-   omits a transaction hash on pending logs.
-5. **Log every applied event to stdout.** The price line on each
-   `SwapExecuted` is the live quote signal for partner consumers.
+1. **Seed** initial pool state from an HTTP RPC. This is the only required
+   synchronous chain read before the service can quote from cache.
+2. **Subscribe** over WebSocket to `newHeads`, `newFlashblocks`, and
+   `pendingLogs` filtered by the pool address.
+3. **Apply authoritative state events** (`Sync`, `StateUpdated`,
+   `ConcentrationKSet`, `BlockDelaySet`, `Paused`/`Unpaused`,
+   `WhitelistSet`, `BlacklistFeeMultiplierSet`) to the cache. Current pools
+   emit `Sync` before `SwapExecuted`, so the latter is observed for fills only
+   and is never applied to reserves a second time.
+4. **Deduplicate** logs re-emitted across pre-confirmation snapshots by
+   `(blockNumber, transactionHash, logIndex)`.
+5. **Quote from Redis only** through `quote_exact_in`. The quoter reads
+   anchor price, directional fees, reserves, concentration, freshness config,
+   paused state, and the effective fee multiplier for the configured execution
+   caller. A quote's hypothetical `pNext` is returned but not cached as current
+   Pool state.
+
+End-to-end latency from `pendingLogs` → Redis write is single-digit
+milliseconds in the example deployment.
+
+## Data needed for a fully off-chain quote
+
+The math crate does not call the chain. Your service must keep these values
+warm in cache:
+
+| Value | Source | Why it is needed |
+| ----- | ------ | ---------------- |
+| `anchorPrice` / `sqrt_price_x96` | `state()` + `StateUpdated` | PMM anchor in Q64.96 |
+| `feeAskX24`, `feeBidX24` | `state()` + `StateUpdated` | Directional base fees |
+| `reserveX`, `reserveY` | `getXReserve`, `getYReserve` + `Sync` | Current cached reserves |
+| `concentrationK` | `concentrationK()` + `ConcentrationKSet` | Curve concentration in Q20.12 |
+| `blockDelay`, `latestUpdateBlock`, `head` | `blockDelay()`, `state()`, `newHeads` | Fail-closed freshness check |
+| `paused` | `paused()` + `Paused`/`Unpaused` | Do not quote executable swaps while paused |
+| `isWhitelisted(QUOTE_CALLER_ADDRESS)` | seed + `WhitelistSet` | Decides whether multiplier is `1` |
+| `blacklistFeeMultiplier` | seed + `BlacklistFeeMultiplierSet` | Multiplier for non-whitelisted callers |
+
+`QUOTE_CALLER_ADDRESS` must be the exact address the Pool sees as
+`msg.sender`: router, execution adapter, proxy, or settlement contract. It is
+not the taker EOA and not `SwapExecuted.recipient`. If you omit `from` in
+`eth_call`, many tools simulate as `address(0)` and therefore hit a different
+fee path than production.
 
 ## Running
 
-### 1. Local Redis
+### Docker Compose
+
+Run Redis and the Rust quoter together:
 
 ```sh
-docker run -d --name lunarbase-redis -p 6379:6379 redis:7-alpine
+cd examples/offchain-quoting
+cp rust/.env.example rust/.env
+# edit rust/.env and set RPC_URL / FLASH_WS
+docker compose up --build
 ```
 
-### 2. Configure (env, all optional — sane defaults are baked in)
-
-| Variable       | Default                                    | Notes                                                               |
-| -------------- | ------------------------------------------ | ------------------------------------------------------------------- |
-| `POOL_ADDRESS` | mainnet ETH/USDC pool                      | Pool contract address.                                              |
-| `RPC_URL`      | preconfigured Base node                    | HTTP RPC for the one-shot seed (`state()`, reserves, params).       |
-| `FLASH_WS`     | preconfigured Base flashblocks WS          | WebSocket source for `newHeads` + `newFlashblocks` + `pendingLogs`. |
-| `REDIS_URL`    | `redis://127.0.0.1:6379`                   | Connection string for Redis.                                        |
-| `RUST_LOG`     | `info,offchain_quoting_example_rust=debug` | Standard `tracing-subscriber` env filter.                           |
-
-### 3. Run
-
-Current ABI:
+Useful commands:
 
 ```sh
+docker compose logs -f quoter
+docker compose exec redis redis-cli MONITOR
+docker compose down
+```
+
+The compose file reads `RPC_URL` and `FLASH_WS` from `rust/.env`. Keep
+private/internal endpoints there only; `.env` is git-ignored.
+
+The compose file defaults only non-sensitive values:
+
+```sh
+POOL_ADDRESS=0x0000eFC4ec03a7c47D3a38A9Be7Ff1d52dD01b99
+QUOTE_CALLER_ADDRESS=0x0000000000000000000000000000000000000000
+```
+
+Override values inline when needed:
+
+```sh
+QUOTE_CALLER_ADDRESS=0xYourRouterOrExecutionAdapter \
+QUOTE_AMOUNT_IN=1000000000000000 \
+QUOTE_DIRECTION=x_to_y \
+QUOTER_RUST_LOG=info,offchain_quoting_example_rust=debug \
+docker compose up --build
+```
+
+Inside compose, `REDIS_URL` is set to `redis://redis:6379`; do not point it at
+`127.0.0.1`, because the service runs in a separate container.
+
+### Local
+
+```sh
+# 1. local Redis
+docker run -d --name lunarbase-redis -p 6379:6379 redis:7-alpine
+
+# 2. copy and edit config
+cp examples/offchain-quoting/rust/.env.example examples/offchain-quoting/rust/.env
+
+# 3. run the current contract example
 cargo run --release -p offchain-quoting-example-rust
 ```
 
-Legacy ABI:
+Configurable via env: `POOL_ADDRESS`, `RPC_URL`, `FLASH_WS`, `REDIS_URL`,
+`QUOTE_CALLER_ADDRESS`, `QUOTE_AMOUNT_IN`, `QUOTE_DIRECTION`,
+`QUOTE_INTERVAL_SECS`, `SEED_TIMEOUT_SECS`, `REDIS_CONNECT_TIMEOUT_SECS`,
+`RUST_LOG`.
+
+You can also run without a `.env` file:
 
 ```sh
-cargo run --release -p offchain-quoting-example-rust-legacy
+POOL_ADDRESS=0x0000eFC4ec03a7c47D3a38A9Be7Ff1d52dD01b99 \
+QUOTE_CALLER_ADDRESS=0x0000000000000000000000000000000000000000 \
+RPC_URL=<http-rpc-url> \
+FLASH_WS=<websocket-url> \
+REDIS_URL=redis://127.0.0.1:6379 \
+QUOTE_AMOUNT_IN=1000000000000000 \
+QUOTE_DIRECTION=x_to_y \
+cargo run --release -p offchain-quoting-example-rust
 ```
 
-You should see, in roughly this order:
+## Redis layout
 
-```text
-INFO starting offchain quoter pool=0x... rpc=... ws=... redis=...
-INFO seeded pool state from RPC head_block=... reserve_x=... reserve_y=... ...
-INFO opening flashblocks WS ws_url=...
-INFO StateUpdated  block=... anchor_px48=... fee_q48=...
-INFO Sync          block=... reserve_x=... reserve_y=...
-INFO swap applied; live price updated direction="X->Y" dx=... dy=... sqrt_price_x48=... reserve_x=... reserve_y=...
-```
+| Key                           | Type   | TTL  | Content                                   |
+| ----------------------------- | ------ | ---- | ----------------------------------------- |
+| `reserves:<pool>`             | JSON   | —    | `["<reserveX>", "<reserveY>"]`            |
+| `updates:<pool>`              | JSON   | —    | `{block, anchorPrice, feeAskX24, feeBidX24}` |
+| `pmm:concentrationK:<pool>`   | string | —    | decimal `uint32`                          |
+| `pmm:blockDelay:<pool>`       | string | —    | decimal `uint48`                          |
+| `pmm:paused:<pool>`           | string | —    | `0` / `1`                                 |
+| `pmm:callerWhitelisted:<pool>:<caller>` | string | — | `0` / `1` for the configured caller |
+| `pmm:blacklistFeeMultiplier:<pool>` | string | — | decimal `uint256`                         |
+| `head:<pool>`                 | string | 30 s | confirmed `blockNumber`                   |
+| `log:tx:<pool>:<fingerprint>` | string | 10 s | dedup token (`SET NX EX 10`)              |
 
-## Inspecting the cache
-
-The Redis key layout (per pool) follows the same shape as a production
-deployment so that your service code translates 1:1 to a partner-side worker:
-
-| Key                           | Type          | TTL  | Content                                           |
-| ----------------------------- | ------------- | ---- | ------------------------------------------------- |
-| `reserves:<pool>`             | string (JSON) | 10 s | `["<reserveX>", "<reserveY>"]`                    |
-| `updates:<pool>`              | string (JSON) | 6 s  | `{"block": N, "anchorPX48": "...", "fee": "..."}` |
-| `sqrtprice:<pool>`            | string        | 6 s  | decimal `sqrt_price_x48`                          |
-| `pmm:concentrationK:<pool>`   | string        | 60 s | decimal `uint32`                                  |
-| `pmm:blockDelay:<pool>`       | string        | 60 s | decimal `uint48`                                  |
-| `pmm:paused:<pool>`           | string        | 60 s | `0` / `1`                                         |
-| `head:<pool>`                 | string        | 30 s | confirmed `blockNumber`                           |
-| `log:tx:<pool>:<fingerprint>` | string        | 10 s | dedup token (`SET NX EX 10`)                      |
+Inspect:
 
 ```sh
 docker exec lunarbase-redis redis-cli MONITOR
 docker exec lunarbase-redis redis-cli KEYS '*'
 ```
 
-## How latency is achieved
+## Scope
 
-- The **WebSocket reader task** does I/O + lightweight JSON parsing and forwards
-  routed `ChainEvent`s through a bounded `mpsc(1024)` channel.
-- A **single event consumer** owns the `Cache` (no `Mutex`) and applies events
-  in arrival order, which is the only correct semantics for `Sync` /
-  `SwapExecuted` / `StateUpdated` interleavings within one block.
-- A **backpressure monitor** logs a `WARN` every 5 s if the channel high-water
-  mark exceeds 75 % — that's the signal that Redis (or your handler) is
-  lagging.
-- Swap-delta application uses an atomic Redis `MULTI` pipeline (`sqrtprice` +
-  `reserves` written together) so consumers never observe a torn post-swap
-  state.
+The example is **read-only**: no transaction signing, no swap calldata
+construction, no anchor-price computation, no CEX integration.
 
-End-to-end latency from `pendingLogs` → `swap applied` Redis write is single-digit
-milliseconds in the example deployment.
+Required quote state is persistent so a quiet pool remains quoteable between
+swaps. The expiring `head` key is a separate liveness guard: if head updates
+stop, the quoter fails closed instead of presenting old state as fresh.
 
-## What is **not** in here
+The example uses separate Redis connections for event ingestion and quote
+reads. Keep that separation in production so slow client requests cannot block
+chain-event processing. For multiple execution callers, run one quoter cache
+namespace per caller or include caller in the fee-policy keys as shown here.
 
-- No anchor-price computation, no volatility model, no CEX integration.
-  Partners should not — and do not need to — reproduce that side of the
-  system. They consume `StateUpdated` events, which is the operator's
-  agreed-upon public interface.
-- No write-side: no transaction signing, no `swapExactIn` calldata
-  construction. The example is read-only.
-
-## Reference
-
-- Math crate: [`math/rust/lunarbase-pmm-math`](../../math/rust/lunarbase-pmm-math)
-- Public quoter API: `quote_x_to_y(params, dx)`, `quote_y_to_x(params, dy)`
-- Pool params struct: `PoolParams { sqrt_price_x48, anchor_sqrt_price_x48, fee_q48, reserve_x, reserve_y, concentration_k }`
+See [`math/rust/lunarbase-pmm-math`](../../math/rust/lunarbase-pmm-math) for
+the quoter API.

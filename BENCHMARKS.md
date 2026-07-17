@@ -138,7 +138,7 @@ Also pre-computed `q96` as a package-level constant to avoid repeated
 - **Go:** `go test -bench=. -benchmem -count=3 -run=^$ ./...` runs each
   benchmark three times. Numbers reported are the median of the three runs;
   GC is on with default settings.
-- All scenarios use Q48 fixed-point with `concentrationK ∈ {5000, 8000}`.
+- All scenarios use Q64.96 fixed-point with `concentrationK ∈ {5000, 8000}`.
   See the bench source for exact pool parameters.
 
 ## Why we don't run benchmarks in CI

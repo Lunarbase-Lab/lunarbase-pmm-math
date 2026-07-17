@@ -8,7 +8,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-lunarbase-pmm-math = { path = "../../../math/rust/lunarbase-pmm-math" }
+lunarbase-pmm-math = { version = "0.2.6", path = "../../../math/rust/lunarbase-pmm-math" }
 
 # Async runtime
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "signal", "net"] }

@@ -1,0 +1,10 @@
+.git
+.gitignore
+.DS_Store
+target
+**/target
+**/.env
+**/node_modules
+math/rust-node/lunarbase-pmm-math-node/npm
+examples/minimal/typescript/node_modules
+examples/minimal/go/go

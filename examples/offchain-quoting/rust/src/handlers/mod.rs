@@ -2,11 +2,12 @@ mod swap;
 
 use alloy::primitives::{keccak256, B256};
 use alloy::sol_types::SolEvent;
-use eyre::Result;
-use tracing::{debug, info, warn};
+use eyre::{ContextCompat, Result};
+use tracing::{debug, info};
 
 use crate::abi::Pool;
 use crate::cache::Cache;
+use crate::pool_state::{parse_decimal_u256, u160_to_u128_checked};
 use crate::ws::types::LogEvent;
 use crate::ws::ChainEvent;
 
@@ -41,10 +42,18 @@ async fn handle_log(log: LogEvent, cache: &mut Cache) -> Result<()> {
 
     if topic0 == sig::<Pool::StateUpdated>() {
         let ev = decode::<Pool::StateUpdated>(&log)?;
-        let anchor: u128 = ev.state.anchorPX48.to();
-        let fee: u64 = ev.state.fee.to();
-        cache.set_state(block, anchor, fee).await?;
-        info!(block, anchor_px48 = anchor, fee_q48 = fee, "StateUpdated");
+        let anchor = u160_to_u128_checked(ev.anchorPrice)
+            .context("anchorPrice exceeds the math crate's supported u128 Q96 range")?;
+        let fee_ask: u32 = ev.feeAskX24.to();
+        let fee_bid: u32 = ev.feeBidX24.to();
+        cache.set_state(block, anchor, fee_ask, fee_bid).await?;
+        info!(
+            block,
+            anchor_price = %anchor,
+            fee_ask_x24 = fee_ask,
+            fee_bid_x24 = fee_bid,
+            "StateUpdated"
+        );
     } else if topic0 == sig::<Pool::Sync>() {
         let ev = decode::<Pool::Sync>(&log)?;
         let x: u128 = ev.reserveX;
@@ -53,11 +62,10 @@ async fn handle_log(log: LogEvent, cache: &mut Cache) -> Result<()> {
         info!(block, reserve_x = x, reserve_y = y, "Sync");
     } else if topic0 == sig::<Pool::SwapExecuted>() {
         let ev = decode::<Pool::SwapExecuted>(&log)?;
-        if let Some(snap) = cache.snapshot().await? {
-            swap::apply(&ev, &snap, cache).await?;
-        } else {
-            warn!("snapshot empty when applying SwapExecuted");
-        }
+        // Current pools emit an authoritative Sync before SwapExecuted. The
+        // hypothetical pNext returned by quote math is not persisted on-chain,
+        // so applying the swap again here would double-update the reserves.
+        swap::observe(&ev);
     } else if topic0 == sig::<Pool::ConcentrationKSet>() {
         let ev = decode::<Pool::ConcentrationKSet>(&log)?;
         cache.set_concentration_k(ev.concentrationK).await?;
@@ -67,6 +75,31 @@ async fn handle_log(log: LogEvent, cache: &mut Cache) -> Result<()> {
         let d: u64 = ev.blockDelay.to();
         cache.set_block_delay(d).await?;
         info!(block_delay = d, "BlockDelaySet");
+    } else if topic0 == sig::<Pool::WhitelistSet>() {
+        let ev = decode::<Pool::WhitelistSet>(&log)?;
+        if cache.is_quote_caller(ev.account) {
+            // Whitelist is keyed by msg.sender. Only update this quote cache
+            // when the event targets the exact router/adapter address that
+            // production swaps use to call the Pool.
+            cache.set_caller_whitelisted(ev.whitelisted).await?;
+            info!(
+                account = %ev.account,
+                whitelisted = ev.whitelisted,
+                "WhitelistSet for quote caller"
+            );
+        } else {
+            debug!(
+                account = %ev.account,
+                whitelisted = ev.whitelisted,
+                "WhitelistSet ignored for non-quote caller"
+            );
+        }
+    } else if topic0 == sig::<Pool::BlacklistFeeMultiplierSet>() {
+        let ev = decode::<Pool::BlacklistFeeMultiplierSet>(&log)?;
+        let multiplier = parse_decimal_u256(&ev.multiplier.to_string())
+            .context("BlacklistFeeMultiplierSet multiplier does not fit U256")?;
+        cache.set_blacklist_fee_multiplier(multiplier).await?;
+        info!(multiplier = %multiplier, "BlacklistFeeMultiplierSet");
     } else if topic0 == sig::<Pool::Paused>() {
         cache.set_paused(true).await?;
         info!("Paused");

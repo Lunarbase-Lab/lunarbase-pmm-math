@@ -13,7 +13,7 @@ import (
 type vector struct {
 	Name   string `json:"name"`
 	Dir    string `json:"dir"`
-	PX48   string `json:"pX48"`
+	PX96   string `json:"pX96"`
 	Fee    string `json:"fee"`
 	ResX   string `json:"resX"`
 	ResY   string `json:"resY"`
@@ -48,14 +48,21 @@ func runVectorFile(t *testing.T, path string) {
 		require.NoError(t, json.Unmarshal([]byte(raw), &v), "parse error line %d", line)
 		total++
 
-		p := u(v.PX48)
+		p := u(v.PX96)
+		feeX24 := uint32(u(v.Fee).Uint64())
+		var feeAsk, feeBid uint32
+		if v.Dir == "xToY" {
+			feeBid = feeX24
+		} else {
+			feeAsk = feeX24
+		}
 		params := &PoolParams{
-			SqrtPriceX48:       p,
-			AnchorSqrtPriceX48: p,
-			FeeQ48:             u(v.Fee).Uint64(),
-			ReserveX:           u(v.ResX),
-			ReserveY:           u(v.ResY),
-			ConcentrationK:     v.K,
+			SqrtPriceX96:   p,
+			FeeAskX24:      feeAsk,
+			FeeBidX24:      feeBid,
+			ReserveX:       u(v.ResX),
+			ReserveY:       u(v.ResY),
+			ConcentrationK: v.K,
 		}
 
 		if v.Dir == "xToY" {

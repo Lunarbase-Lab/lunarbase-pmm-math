@@ -8,4 +8,8 @@ ignore = [
     # alloy-sol-types (used only by the offchain-quoting example crates,
     # not by the published math crates).
     "RUSTSEC-2024-0436",
+    # `proc-macro-error2` is unmaintained and currently has no safe upgrade.
+    # It is pulled through the same Alloy proc-macro stack used only by the
+    # offchain-quoting example crate.
+    "RUSTSEC-2026-0173",
 ]

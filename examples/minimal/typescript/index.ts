@@ -1,26 +1,35 @@
-// Minimal example: quote a swap in both directions and print the results.
+// Minimal example pulling @lunarbase-lab/pmm-math directly from npm.
 //
-// Run from this directory:
+// One-shot from this directory:
 //   npm install
 //   npm run run
 //
-// `prerun` builds the napi addon in math/rust-node/lunarbase-pmm-math-node,
-// which is consumed here as a local file dependency.
-import { quoteXToY, quoteYToX, type QuoteParams } from "lunarbase-pmm-math-node";
+// `npm install` resolves the right native binary for your OS/arch via
+// optionalDependencies — no build step, no Rust toolchain required.
+//
+import { quoteXToY, quoteYToX } from "@lunarbase-lab/pmm-math";
 
-const Q48 = (1n << 48n).toString();
+// Q64.96 = 2^96 represents price = 1.0 in the sqrt-price encoding.
+const Q96 = (1n << 96n).toString();
 
-const baseParams: Omit<QuoteParams, "amountIn"> = {
-  sqrtPriceX48: Q48,
-  anchorSqrtPriceX48: Q48,
-  feeQ48: (1n << 44n).toString(),
+// Q24 = 2^24 represents 100% in the directional fee fields.
+const Q24 = Number(1 << 24);
+
+const baseParams = {
+  sqrtPriceX96: Q96,
+  // 0.10% fees on both sides.
+  feeAskX24: Math.floor(Q24 / 1000),
+  feeBidX24: Math.floor(Q24 / 1000),
   reserveX: "1000000000",
   reserveY: "1000000000",
-  concentrationK: 5_000,
-};
+  // Concentration K is Q20.12. Legacy plain-int K=5000 maps to 5000 << 12.
+  concentrationK: 5000 << 12,
+} as const;
 
-const xToY = quoteXToY({ ...baseParams, amountIn: "10000" });
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const xToY = quoteXToY({ ...baseParams, amountIn: "10000" } as any);
 console.log(`X->Y  in=10000  out=${xToY.amountOut}  fee=${xToY.fee}  pNext=${xToY.sqrtPriceNext}`);
 
-const yToX = quoteYToX({ ...baseParams, amountIn: "10000" });
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const yToX = quoteYToX({ ...baseParams, amountIn: "10000" } as any);
 console.log(`Y->X  in=10000  out=${yToX.amountOut}  fee=${yToX.fee}  pNext=${yToX.sqrtPriceNext}`);

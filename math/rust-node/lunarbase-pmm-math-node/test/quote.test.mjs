@@ -3,7 +3,14 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { quoteXToY, quoteYToX } from "../wrapper.js";
+import {
+  priceToSqrtPriceX96,
+  price_to_sqrt_price_x96,
+  quoteXToY,
+  quoteYToX,
+  sqrtPriceX96ToPrice,
+  sqrt_price_x96_to_price,
+} from "../wrapper.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const vectorsDir = path.join(__dirname, "..", "..", "..", "rust", "lunarbase-pmm-math");
@@ -25,6 +32,25 @@ function readJsonl(filePath) {
 const deterministicVectors = readJsonl(deterministicVectorsPath);
 const fuzzVectors = readJsonl(fuzzVectorsPath);
 
+/**
+ * Build the `QuoteParams` shape from a JSONL row (Q64.96 design).
+ * Each row exercises one direction; the JSONL `fee` field carries the
+ * directionally-relevant Q24 fee (bid for xToY, ask for yToX), so the other
+ * side is a don't-care set to 0.
+ */
+function paramsFromVector(vector) {
+  const isXToY = vector.dir === "xToY";
+  return {
+    sqrtPriceX96: String(vector.pX96),
+    feeAskX24: isXToY ? 0 : Number(vector.fee),
+    feeBidX24: isXToY ? Number(vector.fee) : 0,
+    reserveX: String(vector.resX),
+    reserveY: String(vector.resY),
+    concentrationK: Number(vector.k),
+    amountIn: String(isXToY ? vector.dx : vector.dy),
+  };
+}
+
 describe("deterministic vectors (from Solidity)", () => {
   if (deterministicVectors.length === 0) {
     it("(skipped — no deterministic_vectors.jsonl)", () => {});
@@ -33,30 +59,26 @@ describe("deterministic vectors (from Solidity)", () => {
 
   for (const vector of deterministicVectors) {
     it(`${vector.name}: ${vector.dir}`, () => {
-      const params = {
-        sqrtPriceX48: vector.pX48,
-        feeQ48: vector.fee,
-        reserveX: vector.resX,
-        reserveY: vector.resY,
-        concentrationK: vector.k,
-        amountIn: vector.dir === "xToY" ? vector.dx : vector.dy,
-      };
-
+      const params = paramsFromVector(vector);
       const result = vector.dir === "xToY" ? quoteXToY(params) : quoteYToX(params);
-      const expectedOut = vector.dir === "xToY" ? vector.dy : vector.dx;
+      const expectedOut = vector.dir === "xToY" ? String(vector.dy) : String(vector.dx);
 
       assert.equal(result.amountOut, expectedOut, `${vector.name}: amountOut mismatch`);
-      assert.equal(result.sqrtPriceNext, vector.pNext, `${vector.name}: sqrtPriceNext mismatch`);
-      assert.equal(result.fee, vector.feeAmt, `${vector.name}: fee mismatch`);
+      assert.equal(result.sqrtPriceNext, String(vector.pNext), `${vector.name}: sqrtPriceNext mismatch`);
+      assert.equal(result.fee, String(vector.feeAmt), `${vector.name}: fee mismatch`);
     });
   }
 });
 
+// Q64.96 sqrt-price for price = 1.0 (`2^96`). Used by the edge-case suite.
+const SQRT_PRICE_X96_ONE = "79228162514264337593543950336";
+
 describe("edge cases", () => {
   it("returns zero output for zero reserves", () => {
     const result = quoteXToY({
-      sqrtPriceX48: "281474976710656",
-      feeQ48: "14073748835532",
+      sqrtPriceX96: SQRT_PRICE_X96_ONE, // Q96 = price 1.0
+      feeAskX24: 0,
+      feeBidX24: 838860, // 5% in Q24
       reserveX: "0",
       reserveY: "0",
       concentrationK: 5000,
@@ -65,41 +87,15 @@ describe("edge cases", () => {
     assert.equal(result.amountOut, "0");
   });
 
-  it("accepts hex input strings", () => {
-    const result = quoteXToY({
-      sqrtPriceX48: "0x" + BigInt("281474976710656").toString(16),
-      feeQ48: "0x" + BigInt("14073748835532").toString(16),
-      reserveX: "0x" + BigInt("1000000000000000000000").toString(16),
-      reserveY: "0x" + BigInt("1000000000000000000000").toString(16),
-      concentrationK: 5000,
-      amountIn: "0x" + BigInt("1000000000000000000").toString(16),
-    });
 
-    assert.equal(result.amountOut, "949975824130540819");
-    assert.equal(result.sqrtPriceNext, "281467813676027");
-    assert.equal(result.fee, "49998727585814946");
-  });
+});
 
-  it("quoteXToY and quoteYToX match the deterministic price=1 vectors", () => {
-    const params = {
-      sqrtPriceX48: "281474976710656",
-      feeQ48: "14073748835532",
-      reserveX: "1000000000000000000000",
-      reserveY: "1000000000000000000000",
-      concentrationK: 5000,
-      amountIn: "1000000000000000000",
-    };
-
-    const xToY = quoteXToY(params);
-    const yToX = quoteYToX(params);
-
-    assert.equal(xToY.amountOut, "949975824130540819");
-    assert.equal(xToY.sqrtPriceNext, "281467813676027");
-    assert.equal(xToY.fee, "49998727585814946");
-
-    assert.equal(yToX.amountOut, "949975824123168435");
-    assert.equal(yToX.sqrtPriceNext, "281482139927576");
-    assert.equal(yToX.fee, "49998727585426925");
+describe("Q64.96 converter helpers", () => {
+  it("keeps camelCase and snake_case X96 helpers exported", () => {
+    assert.equal(priceToSqrtPriceX96(1.0), SQRT_PRICE_X96_ONE);
+    assert.equal(price_to_sqrt_price_x96(1.0), SQRT_PRICE_X96_ONE);
+    assert.equal(sqrtPriceX96ToPrice(SQRT_PRICE_X96_ONE), 1.0);
+    assert.equal(sqrt_price_x96_to_price(SQRT_PRICE_X96_ONE), 1.0);
   });
 });
 
@@ -114,22 +110,15 @@ describe("fuzz vectors (from Solidity)", () => {
 
     for (let i = 0; i < fuzzVectors.length; i += 1) {
       const vector = fuzzVectors[i];
-      const params = {
-        sqrtPriceX48: vector.pX48,
-        feeQ48: vector.fee,
-        reserveX: vector.resX,
-        reserveY: vector.resY,
-        concentrationK: vector.k,
-        amountIn: vector.dir === "xToY" ? vector.dx : vector.dy,
-      };
+      const params = paramsFromVector(vector);
 
       const result = vector.dir === "xToY" ? quoteXToY(params) : quoteYToX(params);
-      const expectedOut = vector.dir === "xToY" ? vector.dy : vector.dx;
+      const expectedOut = vector.dir === "xToY" ? String(vector.dy) : String(vector.dx);
 
       if (
         result.amountOut !== expectedOut
-        || result.sqrtPriceNext !== vector.pNext
-        || result.fee !== vector.feeAmt
+        || result.sqrtPriceNext !== String(vector.pNext)
+        || result.fee !== String(vector.feeAmt)
       ) {
         failures.push(
           `Line ${i + 1} (${vector.dir}): out=${result.amountOut} expected=${expectedOut}, `

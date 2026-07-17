@@ -6,15 +6,19 @@
 #[cfg(test)]
 mod cross_validation {
     use crate::curve_pmm::*;
-    use crate::uint256::{U256Ext, U256};
+    use crate::uint256::U256;
 
     struct DeterministicVector {
         name: String,
         dir: String,
-        p_x48: u128,
-        fee: u64,
+        p_x96: u128,
+        /// Directional fee (Q24): `feeBidX24` for `xToY` rows, `feeAskX24`
+        /// for `yToX` rows. The non-quoted side's fee is irrelevant for the
+        /// quote and arbitrarily set to zero by the parser.
+        fee_x24: u32,
         res_x: u128,
         res_y: u128,
+        /// Concentration K stored as Q20.12.
         k: u32,
         amount_in: u128,
         amount_out: u128,
@@ -46,8 +50,8 @@ mod cross_validation {
     fn parse_vector(line: &str) -> DeterministicVector {
         let dir = extract_field(line, "dir").to_string();
         let name = extract_field(line, "name").to_string();
-        let p_x48 = parse_u128(extract_field(line, "pX48"));
-        let fee = parse_u128(extract_field(line, "fee")) as u64;
+        let p_x96 = parse_u128(extract_field(line, "pX96"));
+        let fee_x24 = parse_u128(extract_field(line, "fee")) as u32;
         let res_x = parse_u128(extract_field(line, "resX"));
         let res_y = parse_u128(extract_field(line, "resY"));
         let k = parse_u128(extract_field(line, "k")) as u32;
@@ -69,8 +73,8 @@ mod cross_validation {
         DeterministicVector {
             name,
             dir,
-            p_x48,
-            fee,
+            p_x96,
+            fee_x24,
             res_x,
             res_y,
             k,
@@ -96,10 +100,15 @@ mod cross_validation {
             let v = parse_vector(line);
             total += 1;
 
+            let (fee_ask_x24, fee_bid_x24) = if v.dir == "xToY" {
+                (0u32, v.fee_x24)
+            } else {
+                (v.fee_x24, 0u32)
+            };
             let params = PoolParams {
-                sqrt_price_x48: v.p_x48,
-                anchor_sqrt_price_x48: v.p_x48,
-                fee_q48: v.fee,
+                sqrt_price_x96: v.p_x96,
+                fee_ask_x24,
+                fee_bid_x24,
                 reserve_x: v.res_x,
                 reserve_y: v.res_y,
                 concentration_k: v.k,
@@ -120,11 +129,11 @@ mod cross_validation {
                     v.name,
                     i + 1,
                     v.dir,
-                    result.amount_out.as_u128(),
+                    result.amount_out,
                     v.amount_out,
                     result.sqrt_price_next,
                     v.p_next,
-                    result.fee.as_u128(),
+                    result.fee,
                     v.fee_amt,
                 ));
             }
@@ -144,5 +153,25 @@ mod cross_validation {
         }
 
         eprintln!("ALL {total} deterministic vectors passed!");
+    }
+
+    #[test]
+    fn tiny_curve_delta_does_not_fallback_to_linear() {
+        let params = PoolParams {
+            sqrt_price_x96: 1u128 << 96,
+            fee_ask_x24: 0,
+            fee_bid_x24: 0,
+            reserve_x: 1_000_000,
+            reserve_y: 1_000_000,
+            concentration_k: 5_000,
+        };
+
+        let x_to_y = quote_x_to_y(&params, U256::from(1u64));
+        assert_eq!(x_to_y.amount_out, U256::ZERO);
+        assert_eq!(x_to_y.fee, U256::ZERO);
+
+        let y_to_x = quote_y_to_x(&params, U256::from(1u64));
+        assert_eq!(y_to_x.amount_out, U256::ZERO);
+        assert_eq!(y_to_x.fee, U256::ZERO);
     }
 }
