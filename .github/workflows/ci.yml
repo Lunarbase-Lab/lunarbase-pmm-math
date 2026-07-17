@@ -81,7 +81,12 @@ jobs:
           install-go: false
 
       - name: test (with race detector)
+        if: runner.os == 'Linux'
         run: go test -race -count=1 ./...
+
+      - name: test
+        if: runner.os == 'macOS'
+        run: go test -count=1 ./...
 
   cross-build:
     name: Cross-compile sanity
