@@ -1350,13 +1350,9 @@ dependencies = [
 
 [[package]]
 name = "ctor"
-version = "0.2.9"
+version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32a2785755761f3ddc1492979ce1e48d2c00d09311c39e4466429188f3dd6501"
-dependencies = [
- "quote",
- "syn 2.0.119",
-]
+checksum = "a394189d59f9befacce833f337f7b1eca5e9a91221bcdd4d28e0114d96e597b3"
 
 [[package]]
 name = "dashmap"
@@ -2335,9 +2331,9 @@ checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "libloading"
-version = "0.8.9"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
 dependencies = [
  "cfg-if",
  "windows-link",
@@ -2449,15 +2445,17 @@ dependencies = [
 
 [[package]]
 name = "napi"
-version = "2.16.17"
+version = "3.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55740c4ae1d8696773c78fdafd5d0e5fe9bc9f1b071c7ba493ba5c413a9184f3"
+checksum = "6826e5ddc15589b2d68c8ad5321c18e85d40488e93e32962f362e572669bccf6"
 dependencies = [
  "bitflags",
  "ctor",
- "napi-derive",
+ "futures",
+ "napi-build",
  "napi-sys",
- "once_cell",
+ "nohash-hasher",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -2497,9 +2495,9 @@ dependencies = [
 
 [[package]]
 name = "napi-sys"
-version = "2.4.0"
+version = "3.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "427802e8ec3a734331fec1035594a210ce1ff4dc5bc1950530920ab717964ea3"
+checksum = "73e43cf2eb0bd1bf95a43c07c076ebd2da5d1e015a71c3d201faeffffcc0ecac"
 dependencies = [
  "libloading",
 ]
@@ -2520,6 +2518,12 @@ dependencies = [
  "security-framework-sys",
  "tempfile",
 ]
+
+[[package]]
+name = "nohash-hasher"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2bf50223579dc7cdcfb3bfcacf7069ff68243f8c363f62ffa99cf000a6b9c451"
 
 [[package]]
 name = "nu-ansi-term"
