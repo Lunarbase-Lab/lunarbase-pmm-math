@@ -20,6 +20,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing Cargo/npm version to publish (for example 0.3.0)"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -48,17 +54,28 @@ jobs:
       - name: Validate tag, Cargo and npm versions
         id: version
         shell: bash
+        env:
+          REQUESTED_VERSION: ${{ github.event.inputs.version }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
-            echo "Tag must have the form vX.Y.Z" >&2
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            version="${GITHUB_REF_NAME#v}"
+            if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+              echo "Tag must have the form vX.Y.Z" >&2
+              exit 1
+            fi
+          else
+            version="${REQUESTED_VERSION}"
+          fi
+
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must have the form X.Y.Z" >&2
             exit 1
           fi
 
           cargo_version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "lunarbase-pmm-math") | .version')"
           if [ "${cargo_version}" != "${version}" ]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match Cargo version ${cargo_version}" >&2
+            echo "Release version ${version} does not match Cargo version ${cargo_version}" >&2
             exit 1
           fi
 
@@ -181,10 +198,15 @@ jobs:
           tool: cargo-zigbuild
 
       - name: Build .node binary
-        # napi-rs CLI auto-detects cargo-zigbuild and uses it when --zig is
-        # passed. For native targets (zig=false) we just call cargo directly.
+        # @napi-rs/cli v2's Zig wrapper does not accept the AArch64 linker
+        # flag emitted by Rust 1.98. Use cargo-zigbuild for linux-arm64-gnu,
+        # matching the already-tested CI cross-build path, then give the
+        # resulting cdylib the filename expected by napi-rs packaging.
         run: |
-          if [ "${{ matrix.zig }}" = "true" ]; then
+          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            CARGO_TARGET_DIR="${{ github.workspace }}/target" cargo zigbuild -p lunarbase-pmm-math-node --release --target ${{ matrix.target }}
+            cp "${{ github.workspace }}/target/${{ matrix.target }}/release/liblunarbase_pmm_math_node.so" lunarbase-pmm-math.linux-arm64-gnu.node
+          elif [ "${{ matrix.zig }}" = "true" ]; then
             CARGO_TARGET_DIR="${{ github.workspace }}/target" npx napi build --platform --release --target ${{ matrix.target }} --zig
           else
             CARGO_TARGET_DIR="${{ github.workspace }}/target" npx napi build --platform --release --target ${{ matrix.target }}
@@ -192,6 +214,7 @@ jobs:
         shell: bash
 
       - name: Rename auto-generated index.js → index.cjs
+        if: matrix.target != 'aarch64-unknown-linux-gnu'
         run: mv -f index.js index.cjs
 
       - name: Upload .node + js metadata
