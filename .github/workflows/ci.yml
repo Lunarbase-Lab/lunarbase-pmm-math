@@ -56,7 +56,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           # Go 1.22 binaries abort on current macos-latest runners with a
           # missing LC_UUID load command. The module keeps go 1.22 as its
@@ -189,7 +189,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: stable
           cache-dependency-path: |
