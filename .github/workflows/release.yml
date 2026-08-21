@@ -224,7 +224,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Download musl artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: bindings-x86_64-unknown-linux-musl
           path: math/rust-node/lunarbase-pmm-math-node/artifacts/musl
@@ -263,7 +263,7 @@ jobs:
         # IMPORTANT: do NOT pass `merge-multiple: true`. `napi artifacts`
         # walks `artifacts/bindings-<full-triple>/` per the napi-rs convention;
         # flattening the layout breaks the move step.
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           path: math/rust-node/lunarbase-pmm-math-node/artifacts
           pattern: bindings-*
