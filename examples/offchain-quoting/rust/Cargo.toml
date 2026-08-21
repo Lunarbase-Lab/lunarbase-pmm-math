@@ -37,7 +37,7 @@ alloy = { version = "0.8", default-features = false, features = [
 ruint = { workspace = true }
 
 # Redis client
-redis = { version = "0.27", default-features = false, features = ["tokio-comp", "aio", "connection-manager", "script"] }
+redis = { version = "1.4", default-features = false, features = ["tokio-comp", "aio", "connection-manager", "script"] }
 
 # Serialization
 serde = { workspace = true }
