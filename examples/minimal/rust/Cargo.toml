@@ -5,5 +5,5 @@ edition = "2021"
 publish = false
 
 [dependencies]
-lunarbase-pmm-math = { version = "0.2.6", path = "../../../math/rust/lunarbase-pmm-math" }
-ruint = "1"
+lunarbase-pmm-math = { version = "0.3.0", path = "../../../math/rust/lunarbase-pmm-math" }
+ruint = "1.20"

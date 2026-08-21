@@ -1,14 +1,14 @@
 name: Release
 
 # Publishes the pure-Rust crate to crates.io and the N-API binding to npm
-# in a single run, gated on a `v*` tag (e.g. `v0.2.6`).
+# in a single run, gated on a `v*` tag (e.g. `v0.3.0`).
 #
 # Required repo secrets:
 #   - CARGO_REGISTRY_TOKEN  → crates.io API token (https://crates.io/me)
 #   - NPM_TOKEN             → npm Automation token with publish on @lunarbase-lab scope
 #
 # Trigger:
-#   git tag v0.2.6 && git push --tags
+#   git tag v0.3.0 && git push origin v0.3.0
 #
 # The job graph is:
 #   publish-crates  ─────────────────────────────────────────────┐
@@ -25,11 +25,69 @@ permissions:
   contents: read
 
 jobs:
+  validate-release:
+    name: Validate release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Validate tag, Cargo and npm versions
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+            echo "Tag must have the form vX.Y.Z" >&2
+            exit 1
+          fi
+
+          cargo_version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "lunarbase-pmm-math") | .version')"
+          if [ "${cargo_version}" != "${version}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match Cargo version ${cargo_version}" >&2
+            exit 1
+          fi
+
+          RELEASE_VERSION="${version}" node -e '
+            const p = require("./math/rust-node/lunarbase-pmm-math-node/package.json");
+            const expected = process.env.RELEASE_VERSION;
+            if (p.version !== expected) throw new Error(`npm version ${p.version} != tag ${expected}`);
+            for (const [name, value] of Object.entries(p.optionalDependencies ?? {})) {
+              if (value !== expected) throw new Error(`${name} version ${value} != tag ${expected}`);
+            }
+          '
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --workspace --all-targets
+
   # ──────────────────────────────────────────────────────────────────
   # crates.io: pure Rust core
   # ──────────────────────────────────────────────────────────────────
   publish-crates:
     name: Publish lunarbase-pmm-math to crates.io
+    needs: validate-release
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,21 +99,35 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: cargo publish (dry-run)
-        run: cargo publish -p lunarbase-pmm-math --dry-run
+        run: cargo publish -p lunarbase-pmm-math --dry-run --locked
+
+      - name: Check whether crate version already exists
+        id: crate
+        env:
+          VERSION: ${{ needs.validate-release.outputs.version }}
+        run: |
+          status="$(curl --silent --show-error \
+            --header 'User-Agent: lunarbase-pmm-math-release (https://github.com/Lunarbase-Lab/lunarbase-pmm-math)' \
+            --output /dev/null --write-out '%{http_code}' \
+            "https://crates.io/api/v1/crates/lunarbase-pmm-math/${VERSION}")"
+          case "${status}" in
+            200) echo "exists=true" >> "${GITHUB_OUTPUT}" ;;
+            404) echo "exists=false" >> "${GITHUB_OUTPUT}" ;;
+            *) echo "Unexpected crates.io response: HTTP ${status}" >&2; exit 1 ;;
+          esac
 
       - name: cargo publish
-        # `continue-on-error: true` lets re-runs of the same tag pass: the
-        # second `cargo publish` will fail with "version already published"
-        # but that's expected and we don't want it to block the npm pipeline
-        # (which has its own `needs: build-napi` chain).
-        continue-on-error: true
-        run: cargo publish -p lunarbase-pmm-math --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        if: steps.crate.outputs.exists != 'true'
+        run: cargo publish -p lunarbase-pmm-math --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   # ──────────────────────────────────────────────────────────────────
   # NAPI: build per-platform binaries
   # ──────────────────────────────────────────────────────────────────
   build-napi:
     name: Build NAPI (${{ matrix.target }})
+    needs: validate-release
     strategy:
       fail-fast: true
       matrix:
@@ -171,7 +243,7 @@ jobs:
   # ──────────────────────────────────────────────────────────────────
   publish-npm:
     name: Publish @lunarbase-lab/pmm-math to npm
-    needs: [build-napi, test-napi-musl]
+    needs: [validate-release, publish-crates, build-napi, test-napi-musl]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -242,7 +314,19 @@ jobs:
           echo "=== npm/ tree ==="
           ls -laR npm/ || true
 
+      - name: Check whether npm version already exists
+        id: npm
+        env:
+          VERSION: ${{ needs.validate-release.outputs.version }}
+        run: |
+          if npm view "@lunarbase-lab/pmm-math@${VERSION}" version >/dev/null 2>&1; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Publish to npm
+        if: steps.npm.outputs.exists != 'true'
         # `npm publish` triggers `prepublishOnly` (= `napi prepublish -t npm
         # --skip-gh-release`), which generates per-triple package.json files,
         # publishes each sub-package via `npm publish` from its dir, and

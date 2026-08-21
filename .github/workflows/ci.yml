@@ -58,7 +58,11 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          # Go 1.22 binaries abort on current macos-latest runners with a
+          # missing LC_UUID load command. The module keeps go 1.22 as its
+          # minimum language version while CI runs on the supported stable
+          # toolchain.
+          go-version: stable
           cache-dependency-path: math/go/go.sum
 
       - name: gofmt
@@ -187,7 +191,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: stable
           cache-dependency-path: |
             math/go/go.sum
             examples/minimal/go/go.sum

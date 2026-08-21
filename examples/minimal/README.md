@@ -11,7 +11,7 @@ Paths are relative to the repository root.
 cargo run --manifest-path examples/minimal/rust/Cargo.toml
 ```
 
-The example pins the `0.2.6` API, uses Q64.96 state, and passes
+The example pins the `0.3.0` API, uses Q64.96 state, and passes
 `fee_multiplier = 1` explicitly for the whitelisted aggregator path:
 
 ```
