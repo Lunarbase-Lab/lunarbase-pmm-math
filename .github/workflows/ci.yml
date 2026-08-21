@@ -132,7 +132,7 @@ jobs:
       - name: Build napi addon
         run: cargo zigbuild -p lunarbase-pmm-math-node --release --target ${{ matrix.target }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: matrix.target == 'x86_64-unknown-linux-musl'
         with:
           node-version: 20
