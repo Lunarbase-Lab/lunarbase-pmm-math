@@ -15,11 +15,11 @@ The example pins the `0.2.6` API, uses Q64.96 state, and passes
 `fee_multiplier = 1` explicitly for the whitelisted aggregator path:
 
 ```
-X->Y  in=10000  out=9990  fee=9  pNext=79228162514169890263886670022
-Y->X  in=10000  out=9990  fee=9  pNext=79228162514358784923201343240
+X->Y  in=10000  out=9990  fee=9  pNext=79228120012965991766737027072
+Y->X  in=10000  out=9990  fee=9  pNext=79228200293196200550705659904
 ```
 
-`pNext` is the hypothetical settlement price returned by the quote; current
+`pNext` is the informational size-adjusted execution price returned by the quote; current
 Pool contracts do not persist it as their next anchor.
 
 The example crate has its own `Cargo.toml` and is excluded from the workspace.

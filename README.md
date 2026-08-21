@@ -3,9 +3,9 @@
 [![CI](https://github.com/Lunarbase-Lab/lunarbase-pmm-math/actions/workflows/ci.yml/badge.svg)](https://github.com/Lunarbase-Lab/lunarbase-pmm-math/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
 
-Reference implementations of the LunarBase Curve PMM quoting math —
-bit-for-bit identical with the on-chain Solidity contract, validated by
-shared JSONL test vectors.
+Reference implementations of the LunarBase v1 quoting math with v2-style
+linear size slippage — bit-for-bit identical with the on-chain Solidity
+contract, validated by shared JSONL test vectors.
 
 ## Layout
 
@@ -27,7 +27,7 @@ PoolParams {
     fee_bid_x24,           // uint24,  Q24 — fee on X→Y
     reserve_x,             // uint112
     reserve_y,             // uint112
-    concentration_k,       // uint32,  Q20.12 (effective K = stored / 2^12)
+    concentration_k,       // uint32, legacy Q20.12 encoding of linear slippage K
 }
 
 quote_x_to_y(params, dx) -> QuoteResult { amount_out, sqrt_price_next, fee }
@@ -46,6 +46,24 @@ multiplier from `msg.sender`; for non-whitelisted callers, pass
 `pool.blacklistFeeMultiplier()` into the `*_with_multiplier` helpers (or the
 N-API `feeMultiplier` field) to compare against the same on-chain quote path.
 
+### Linear slippage model
+
+The pool values both reserves in token Y at the operator-published anchor:
+
+```text
+poolCashValue = reserveX * anchorPrice + reserveY
+swapCashValue = amountIn * anchorPrice  // X -> Y
+swapCashValue = amountIn                // Y -> X
+rawKQ12 = ceil(swapCashValue * concentrationK / poolCashValue)
+rawBps = ceil(rawKQ12 / 2^12)
+slippageBps = min(ceil(rawBps / 10), 100_000)
+```
+
+The implementation preserves Solidity's nested rounding exactly, including
+fractional legacy Q20.12 values. `1_000_000` protocol BPS represents 100%, so
+the `100_000` cap is 10%. Slippage is applied first; the existing directional
+Q24 fee remains a separate component and is applied afterwards.
+
 ### Helpers
 
 | Rust                                  | Go                               | N-API / TS                       | Purpose                                                              |
@@ -53,7 +71,7 @@ N-API `feeMultiplier` field) to compare against the same on-chain quote path.
 | `price_to_sqrt_price_x96(price)`      | `PriceToSqrtPriceX96(price)`     | `priceToSqrtPriceX96(price)`     | `f64` decimal price → Q64.96.                                        |
 | `sqrt_price_x96_to_price(p_x96)`      | `SqrtPriceX96ToPrice(pX96)`      | `sqrtPriceX96ToPrice(pX96)`      | Q64.96 → `f64` decimal price `(p/2^96)²`.                            |
 | same as above                         | —                                | `price_to_sqrt_price_x96(price)` / `sqrt_price_x96_to_price(pX96)` | N-API compatibility aliases for the X96 converter helpers. |
-| `plain_to_q12_concentration_k(k)`     | `PlainToQ12ConcentrationK(k)`    | `plainToQ12ConcentrationK(k)`    | Plain `K=100` → Q20.12 `409_600`.                                    |
+| `plain_to_q12_concentration_k(k)`     | `PlainToQ12ConcentrationK(k)`    | `plainToQ12ConcentrationK(k)`    | Linear `K=100` → Q20.12 `409_600`; caps at effective `K=1_000_000`.   |
 | `q12_to_plain_concentration_k(k_q12)` | `Q12ToPlainConcentrationK(kQ12)` | `q12ToPlainConcentrationK(kQ12)` | Q20.12 → plain `K` (truncates).                                      |
 
 ## Build & test
@@ -85,10 +103,8 @@ a Windows runner instead.
 
 ## Test vectors
 
-Identical JSONL vectors live in `math/rust/lunarbase-pmm-math/{deterministic,fuzz}_vectors.jsonl`
-and `math/go/testdata/`. Both implementations replay every vector and assert
-bit-exact equality with the on-chain reference. Regenerate from the Foundry
-suite; update both copies.
+Rust and Node replay JSONL vectors generated directly by the current Foundry
+suite and assert exact equality for `amountOut`, `pNext`, and `fee`.
 
 ## Releases
 

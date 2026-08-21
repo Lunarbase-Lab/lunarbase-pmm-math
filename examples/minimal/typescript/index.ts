@@ -22,7 +22,7 @@ const baseParams = {
   feeBidX24: Math.floor(Q24 / 1000),
   reserveX: "1000000000",
   reserveY: "1000000000",
-  // Concentration K is Q20.12. Legacy plain-int K=5000 maps to 5000 << 12.
+  // Linear slippage K uses the legacy Q20.12 wire/storage encoding.
   concentrationK: 5000 << 12,
 } as const;
 

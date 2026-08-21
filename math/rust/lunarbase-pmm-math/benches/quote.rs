@@ -19,7 +19,7 @@ fn symmetric_pool() -> PoolParams {
         fee_bid_x24: Q24 / 1_000, // 0.10%
         reserve_x: 1_000_000_000_000_000_000,
         reserve_y: 1_000_000_000_000_000_000,
-        concentration_k: 5_000,
+        concentration_k: 5_000 << 12,
     }
 }
 
@@ -31,7 +31,7 @@ fn asymmetric_pool() -> PoolParams {
         fee_bid_x24: Q24 / 333, // ~0.30%
         reserve_x: 750_000_000_000_000_000,
         reserve_y: 1_500_000_000_000_000_000,
-        concentration_k: 8_000,
+        concentration_k: 8_000 << 12,
     }
 }
 

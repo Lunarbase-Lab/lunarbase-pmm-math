@@ -34,7 +34,7 @@ The current example is the integration target.
 4. **Deduplicate** logs re-emitted across pre-confirmation snapshots by
    `(blockNumber, transactionHash, logIndex)`.
 5. **Quote from Redis only** through `quote_exact_in`. The quoter reads
-   anchor price, directional fees, reserves, concentration, freshness config,
+   anchor price, directional fees, reserves, linear slippage coefficient, freshness config,
    paused state, and the effective fee multiplier for the configured execution
    caller. A quote's hypothetical `pNext` is returned but not cached as current
    Pool state.
@@ -52,7 +52,7 @@ warm in cache:
 | `anchorPrice` / `sqrt_price_x96` | `state()` + `StateUpdated` | PMM anchor in Q64.96 |
 | `feeAskX24`, `feeBidX24` | `state()` + `StateUpdated` | Directional base fees |
 | `reserveX`, `reserveY` | `getXReserve`, `getYReserve` + `Sync` | Current cached reserves |
-| `concentrationK` | `concentrationK()` + `ConcentrationKSet` | Curve concentration in Q20.12 |
+| `concentrationK` | `concentrationK()` + `ConcentrationKSet` | Linear slippage K in legacy Q20.12 encoding |
 | `blockDelay`, `latestUpdateBlock`, `head` | `blockDelay()`, `state()`, `newHeads` | Fail-closed freshness check |
 | `paused` | `paused()` + `Paused`/`Unpaused` | Do not quote executable swaps while paused |
 | `isWhitelisted(QUOTE_CALLER_ADDRESS)` | seed + `WhitelistSet` | Decides whether multiplier is `1` |

@@ -1,9 +1,9 @@
 # @lunarbase-lab/pmm-math
 
 N-API binding exposing [`lunarbase-pmm-math`](https://crates.io/crates/lunarbase-pmm-math)
-to Node.js. Bit-exact mirror of the on-chain LunarBase Curve PMM quoting math
-(**Q64.96** `uint160` sqrt-price design), verified against deterministic and fuzz
-vectors generated from the on-chain Solidity contract.
+to Node.js. Bit-exact mirror of the on-chain LunarBase v1 quote path with
+v2-style linear size slippage, verified against deterministic and fuzz vectors
+generated from the current Solidity contract.
 
 ## Install
 
@@ -41,7 +41,7 @@ const params: QuoteParams = {
   feeBidX24: 838860,      // Q24, ≈ 5% charged on X→Y
   reserveX: "1000000000000000000000",
   reserveY: "1000000000000000000000",
-  // Effective K = concentrationK / 2^12.
+  // Linear slippage K uses the legacy Q20.12 wire/storage encoding.
   concentrationK: plainToQ12ConcentrationK(5000),
   amountIn: "1000000000000000000",
 };
@@ -52,6 +52,10 @@ console.log(r.amountOut, r.sqrtPriceNext, r.fee);
 
 All big-integer fields cross the JS ↔ native boundary as **strings** (decimal
 or `0x`-hex). Output amounts are decimal strings.
+
+`1_000_000` protocol BPS represents 100%. The computed size slippage is linear
+in swap cash value and capped at `100_000` (10%). Directional Q24 fees remain a
+separate v1 component and are applied after slippage.
 
 ### API surface
 

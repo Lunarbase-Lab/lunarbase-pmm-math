@@ -17,7 +17,7 @@ mod fuzz {
         fee_x24: u32,
         res_x: u128,
         res_y: u128,
-        /// Concentration K stored as Q20.12.
+        /// Linear slippage K stored in the legacy Q20.12 encoding.
         k: u32,
         amount_in: u128,  // dx for xToY, dy for yToX
         amount_out: u128, // dy for xToY, dx for yToX

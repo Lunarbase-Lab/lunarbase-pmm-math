@@ -1,7 +1,7 @@
 //! Uniswap V3-style sqrt-price arithmetic using Q96 fixed-point.
 //!
-//! All functions here mirror the on-chain `SqrtPriceMath` library and match
-//! the rounding modes used by `CurvePMM.quoteXToY` / `quoteYToX`.
+//! Legacy Uniswap-style helpers retained for public API compatibility. The
+//! current linear-slippage quote path no longer calls this module.
 
 use crate::uint256::{U256Ext, U256};
 
@@ -11,7 +11,7 @@ const Q96: U256 = {
     U256::from_limbs(limbs)
 };
 
-/// `getNextSqrtPriceFromAmountXRoundingUp` (addX=true), used by `quoteXToY`.
+/// `getNextSqrtPriceFromAmountXRoundingUp` (addX=true).
 #[inline]
 pub fn get_next_sqrt_price_from_amount_x_rounding_up(
     sqrt_px96: u128,
@@ -47,7 +47,7 @@ pub fn get_next_sqrt_price_from_amount_x_rounding_up(
     result.as_u128()
 }
 
-/// `getNextSqrtPriceFromAmountYRoundingDown` (addY=true), used by `quoteYToX`.
+/// `getNextSqrtPriceFromAmountYRoundingDown` (addY=true).
 #[inline]
 pub fn get_next_sqrt_price_from_amount_y_rounding_down(
     sqrt_px96: u128,

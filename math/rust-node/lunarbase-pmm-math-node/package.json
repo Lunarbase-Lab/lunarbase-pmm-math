@@ -1,7 +1,7 @@
 {
   "name": "@lunarbase-lab/pmm-math",
   "version": "0.2.6",
-  "description": "N-API binding exposing lunarbase-pmm-math to Node.js. Bit-exact mirror of the on-chain LunarBase Curve PMM quoting math.",
+  "description": "N-API binding for LunarBase v1 quote math with v2-style linear slippage, bit-exact with the on-chain contract.",
   "license": "MIT OR Apache-2.0",
   "type": "module",
   "main": "wrapper.js",

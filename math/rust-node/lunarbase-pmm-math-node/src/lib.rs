@@ -122,7 +122,7 @@ pub struct QuoteParams {
     pub reserve_x: String,
     /// reserve Y as decimal or hex string.
     pub reserve_y: String,
-    /// concentration multiplier in Q20.12 (uint32).
+    /// v2-style linear slippage coefficient in legacy Q20.12 storage encoding (uint32).
     pub concentration_k: u32,
     /// input amount as decimal or hex string.
     pub amount_in: String,

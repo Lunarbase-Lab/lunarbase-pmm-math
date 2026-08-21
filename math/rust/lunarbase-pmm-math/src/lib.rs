@@ -1,4 +1,5 @@
-//! Pure Rust port of the LunarBase Curve PMM quoting math.
+//! Pure Rust port of the LunarBase v1 quoting math with v2-style linear
+//! size slippage.
 //!
 //! The crate is bit-for-bit identical with the on-chain Solidity reference
 //! (current Q64.96 `uint160` sqrt-price design), validated by
@@ -37,8 +38,9 @@ mod fuzz_tests;
 mod tests;
 
 pub use curve_pmm::{
-    plain_to_q12_concentration_k, price_to_sqrt_price_x96, q12_to_plain_concentration_k,
-    quote_x_to_y, quote_x_to_y_with_multiplier, quote_y_to_x, quote_y_to_x_with_multiplier,
-    sqrt_price_x96_to_price, PoolParams, QuoteResult,
+    apply_slippage, plain_to_q12_concentration_k, price_to_sqrt_price_x96,
+    q12_to_plain_concentration_k, quote_slippage_bps, quote_x_to_y, quote_x_to_y_with_multiplier,
+    quote_y_to_x, quote_y_to_x_with_multiplier, sqrt_price_x96_to_price, PoolParams, QuoteResult,
+    BPS, MAX_CONCENTRATION_K, MAX_SLIPPAGE_BPS, MAX_SLIPPAGE_K_BPS, SLIPPAGE_SCALE,
 };
 pub use uint256::{U256Ext, U256};

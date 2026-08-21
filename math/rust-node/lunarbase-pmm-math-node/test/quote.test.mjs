@@ -81,7 +81,7 @@ describe("edge cases", () => {
       feeBidX24: 838860, // 5% in Q24
       reserveX: "0",
       reserveY: "0",
-      concentrationK: 5000,
+      concentrationK: 5000 << 12,
       amountIn: "1000000000000000000",
     });
     assert.equal(result.amountOut, "0");

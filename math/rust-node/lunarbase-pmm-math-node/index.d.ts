@@ -14,7 +14,7 @@ export interface QuoteParams {
   reserveX: string
   /** reserve Y as decimal or hex string. */
   reserveY: string
-  /** concentration multiplier in Q20.12 (uint32). */
+  /** v2-style linear slippage coefficient in legacy Q20.12 storage encoding (uint32). */
   concentrationK: number
   /** input amount as decimal or hex string. */
   amountIn: string
