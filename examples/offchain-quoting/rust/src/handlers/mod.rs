@@ -7,7 +7,7 @@ use tracing::{debug, info};
 
 use crate::abi::Pool;
 use crate::cache::Cache;
-use crate::pool_state::{parse_decimal_u256, u160_to_u128_checked};
+use crate::pool_state::{parse_decimal_u256, u160_to_u256};
 use crate::ws::types::LogEvent;
 use crate::ws::ChainEvent;
 
@@ -42,8 +42,7 @@ async fn handle_log(log: LogEvent, cache: &mut Cache) -> Result<()> {
 
     if topic0 == sig::<Pool::StateUpdated>() {
         let ev = decode::<Pool::StateUpdated>(&log)?;
-        let anchor = u160_to_u128_checked(ev.anchorPrice)
-            .context("anchorPrice exceeds the math crate's supported u128 Q96 range")?;
+        let anchor = u160_to_u256(ev.anchorPrice);
         let fee_ask: u32 = ev.feeAskX24.to();
         let fee_bid: u32 = ev.feeBidX24.to();
         cache.set_state(block, anchor, fee_ask, fee_bid).await?;
@@ -66,10 +65,21 @@ async fn handle_log(log: LogEvent, cache: &mut Cache) -> Result<()> {
         // hypothetical pNext returned by quote math is not persisted on-chain,
         // so applying the swap again here would double-update the reserves.
         swap::observe(&ev);
-    } else if topic0 == sig::<Pool::ConcentrationKSet>() {
-        let ev = decode::<Pool::ConcentrationKSet>(&log)?;
-        cache.set_concentration_k(ev.concentrationK).await?;
-        info!(concentration_k = ev.concentrationK, "ConcentrationKSet");
+    } else if topic0 == sig::<Pool::MaxPunishmentX24Set>() {
+        let ev = decode::<Pool::MaxPunishmentX24Set>(&log)?;
+        let max_punishment_x24: u32 = ev.maxPunishmentX24.to();
+        cache.set_max_punishment_x24(max_punishment_x24).await?;
+        info!(max_punishment_x24, "MaxPunishmentX24Set");
+    } else if topic0 == sig::<Pool::PunishmentApplied>() {
+        let ev = decode::<Pool::PunishmentApplied>(&log)?;
+        let punishment_x24: u32 = ev.punishmentX24.to();
+        let fee_ask_x24: u32 = ev.feeAskX24.to();
+        let fee_bid_x24: u32 = ev.feeBidX24.to();
+        cache.set_directional_fees(fee_ask_x24, fee_bid_x24).await?;
+        info!(
+            x_to_y = ev.xToY,
+            punishment_x24, fee_ask_x24, fee_bid_x24, "PunishmentApplied"
+        );
     } else if topic0 == sig::<Pool::BlockDelaySet>() {
         let ev = decode::<Pool::BlockDelaySet>(&log)?;
         let d: u64 = ev.blockDelay.to();

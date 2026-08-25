@@ -1,86 +1,73 @@
 package lunarbasepmm
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/holiman/uint256"
 )
 
-const fixedPoint96Resolution = 96
-
 var (
-	one = uint256.NewInt(1)
-	q12 = new(uint256.Int).Lsh(one, 12)
-	q24 = new(uint256.Int).Lsh(one, 24)
-	q48 = new(uint256.Int).Lsh(one, 48)
-	q96 = new(uint256.Int).Lsh(one, 96)
-	// u2Pow160 is the exclusive upper bound for a uint160 sqrt-price. Used to
-	// pick the shifted-Q96 fast path in sqrt_price_math.go.
-	u2Pow160 = new(uint256.Int).Lsh(one, 160)
+	one                 = uint256.NewInt(1)
+	q24                 = new(uint256.Int).Lsh(one, 24)
+	q96                 = new(uint256.Int).Lsh(one, 96)
+	maxSqrtPriceX96U160 = new(uint256.Int).Sub(new(uint256.Int).Lsh(one, 160), one)
 )
 
-// mulDivDown computes floor(x*y/denominator) into dst with a 512-bit
-// intermediate. Mirrors Solidity `FullMath.mulDiv` (round-down). Returns dst
-// for chaining. Aliasing dst with x or y is safe — `holiman/uint256`'s
-// MulDivOverflow handles it internally.
-func mulDivDown(dst, x, y, denominator *uint256.Int) *uint256.Int {
-	dst.MulDivOverflow(x, y, denominator)
-	return dst
-}
-
-// mulDivUp computes ceil(x*y/denominator) into dst with a 512-bit intermediate.
-// Mirrors Solidity `FullMath.mulDivRoundingUp`.
-func mulDivUp(dst, x, y, denominator *uint256.Int) *uint256.Int {
-	var rem uint256.Int
-	rem.MulMod(x, y, denominator)
-	dst.MulDivOverflow(x, y, denominator)
-	if !rem.IsZero() {
-		dst.AddUint64(dst, 1)
+// mulDivDownChecked computes floor(x*y/denominator) with a full 512-bit
+// intermediate. It reports the same conditions for which Solidity Math.mulDiv
+// reverts instead of silently returning a truncated quotient.
+func mulDivDownChecked(dst, x, y, denominator *uint256.Int) error {
+	if dst == nil || x == nil || y == nil || denominator == nil {
+		return fmt.Errorf("%w: nil mulDiv operand", ErrInvalidArgument)
 	}
-	return dst
-}
-
-// ceilDiv computes ceil(a/b) into dst.
-func ceilDiv(dst, a, b *uint256.Int) *uint256.Int {
-	var rem uint256.Int
-	dst.DivMod(a, b, &rem)
-	if !rem.IsZero() {
-		dst.AddUint64(dst, 1)
+	if denominator.IsZero() {
+		dst.Clear()
+		return ErrDivisionByZero
 	}
-	return dst
-}
-
-// isqrt computes floor(sqrt(x)) into dst.
-func isqrt(dst, x *uint256.Int) *uint256.Int {
-	return dst.Sqrt(x)
-}
-
-// PlainToQ12ConcentrationK lifts a plain effective K (no fractional part)
-// into the Q20.12 representation expected by `PoolParams.ConcentrationK`.
-// `PlainToQ12ConcentrationK(100) == 409_600`. Saturates at math.MaxUint32
-// if the shift would overflow.
-func PlainToQ12ConcentrationK(k uint32) uint32 {
-	const limit = uint32(1) << 20 // (math.MaxUint32 >> 12) + 1
-	if k >= limit {
-		return ^uint32(0)
+	if _, overflow := dst.MulDivOverflow(x, y, denominator); overflow {
+		dst.Clear()
+		return ErrMathOverflow
 	}
-	return k << 12
+	return nil
 }
 
-// Q12ToPlainConcentrationK reverses [PlainToQ12ConcentrationK] (truncates the
-// fractional part). `Q12ToPlainConcentrationK(409_600) == 100`.
-func Q12ToPlainConcentrationK(kQ12 uint32) uint32 {
-	return kQ12 >> 12
+// mulDivUpChecked computes ceil(x*y/denominator) and checks both quotient and
+// rounding-increment overflow.
+func mulDivUpChecked(dst, x, y, denominator *uint256.Int) error {
+	if dst == nil || x == nil || y == nil || denominator == nil {
+		return fmt.Errorf("%w: nil mulDiv operand", ErrInvalidArgument)
+	}
+	if denominator.IsZero() {
+		dst.Clear()
+		return ErrDivisionByZero
+	}
+	var remainder uint256.Int
+	remainder.MulMod(x, y, denominator)
+	if _, overflow := dst.MulDivOverflow(x, y, denominator); overflow {
+		dst.Clear()
+		return ErrMathOverflow
+	}
+	if !remainder.IsZero() {
+		if _, overflow := dst.AddOverflow(dst, one); overflow {
+			dst.Clear()
+			return ErrMathOverflow
+		}
+	}
+	return nil
 }
 
 // PriceToSqrtPriceX96 converts a plain decimal price (e.g. 2500.0) into a
-// Q64.96 sqrt-price (uint160). Lossy beyond float64's 53-bit significand.
-// Panics on NaN/Inf/negative; saturates at 2^256-1 on overflow.
+// Q64.96 sqrt-price. Lossy beyond float64's 53-bit significand. Panics on
+// NaN/Inf/negative and saturates at uint160.max, matching the runtime domain.
 func PriceToSqrtPriceX96(price float64) *uint256.Int {
 	if math.IsNaN(price) || math.IsInf(price, 0) || price < 0 {
 		panic("price must be finite and non-negative")
 	}
 	scaled := math.Sqrt(price) * math.Pow(2, 96)
+	if scaled >= math.Ldexp(1, 160) {
+		return new(uint256.Int).Set(maxSqrtPriceX96U160)
+	}
 	return f64FloorToU256(scaled)
 }
 

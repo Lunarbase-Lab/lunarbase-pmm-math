@@ -7,7 +7,7 @@
 // `npm install` resolves the right native binary for your OS/arch via
 // optionalDependencies — no build step, no Rust toolchain required.
 //
-import { quoteXToY, quoteYToX } from "@lunarbase-lab/pmm-math";
+import { quoteXToY, quoteYToX, simulateXToY } from "@lunarbase-lab/pmm-math";
 
 // Q64.96 = 2^96 represents price = 1.0 in the sqrt-price encoding.
 const Q96 = (1n << 96n).toString();
@@ -22,14 +22,24 @@ const baseParams = {
   feeBidX24: Math.floor(Q24 / 1000),
   reserveX: "1000000000",
   reserveY: "1000000000",
-  // Concentration K is Q20.12. Legacy plain-int K=5000 maps to 5000 << 12.
-  concentrationK: 5000 << 12,
+  // A full-inventory swap can add at most 10% to its direction's fee.
+  maxPunishmentX24: Math.floor(Q24 / 10),
 } as const;
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const xToY = quoteXToY({ ...baseParams, amountIn: "10000" } as any);
-console.log(`X->Y  in=10000  out=${xToY.amountOut}  fee=${xToY.fee}  pNext=${xToY.sqrtPriceNext}`);
+const xToY = quoteXToY({ ...baseParams, amountIn: "10000" });
+console.log(
+  `X->Y  in=10000  out=${xToY.amountOut}  fee=${xToY.fee} `
+    + `effectiveFee=${xToY.effectiveFeeX24} pNext=${xToY.sqrtPriceNext}`,
+);
+const afterXToY = simulateXToY({ ...baseParams, amountIn: "10000" });
+console.log(
+  `      desiredPunishment=${afterXToY.desiredPunishmentX24} `
+    + `appliedPunishment=${afterXToY.appliedPunishmentX24} `
+    + `nextBidFee=${afterXToY.feeBidX24After}`,
+);
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const yToX = quoteYToX({ ...baseParams, amountIn: "10000" } as any);
-console.log(`Y->X  in=10000  out=${yToX.amountOut}  fee=${yToX.fee}  pNext=${yToX.sqrtPriceNext}`);
+const yToX = quoteYToX({ ...baseParams, amountIn: "10000" });
+console.log(
+  `Y->X  in=10000  out=${yToX.amountOut}  fee=${yToX.fee} `
+    + `effectiveFee=${yToX.effectiveFeeX24} pNext=${yToX.sqrtPriceNext}`,
+);

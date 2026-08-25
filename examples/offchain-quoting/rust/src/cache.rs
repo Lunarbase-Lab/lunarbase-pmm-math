@@ -42,8 +42,8 @@ impl Cache {
     fn k_updates(&self) -> String {
         format!("updates:{}", self.pool_tag)
     }
-    fn k_concentration_k(&self) -> String {
-        format!("pmm:concentrationK:{}", self.pool_tag)
+    fn k_max_punishment_x24(&self) -> String {
+        format!("pmm:maxPunishmentX24:{}", self.pool_tag)
     }
     fn k_block_delay(&self) -> String {
         format!("pmm:blockDelay:{}", self.pool_tag)
@@ -92,7 +92,7 @@ impl Cache {
     pub async fn set_state(
         &mut self,
         block: u64,
-        anchor_price: u128,
+        anchor_price: U256,
         fee_ask_x24: u32,
         fee_bid_x24: u32,
     ) -> Result<()> {
@@ -106,11 +106,29 @@ impl Cache {
         Ok(())
     }
 
-    pub async fn set_concentration_k(&mut self, k: u32) -> Result<()> {
+    pub async fn set_max_punishment_x24(&mut self, max_punishment_x24: u32) -> Result<()> {
         let _: () = self
             .conn
-            .set(self.k_concentration_k(), k.to_string())
+            .set(self.k_max_punishment_x24(), max_punishment_x24.to_string())
             .await?;
+        Ok(())
+    }
+
+    /// Apply a `PunishmentApplied` event without changing the operator update
+    /// block or anchor. Punishment changes fees only; treating its log block as
+    /// `latestUpdateBlock` would incorrectly extend quote freshness.
+    pub async fn set_directional_fees(&mut self, fee_ask_x24: u32, fee_bid_x24: u32) -> Result<()> {
+        let key = self.k_updates();
+        let Some(raw): Option<String> = self.conn.get(&key).await? else {
+            return Err(eyre::eyre!(
+                "cannot apply punishment before StateUpdated is cached"
+            ));
+        };
+        let mut updates: UpdatesPayload = serde_json::from_str(&raw)?;
+        updates.fee_ask_x24 = fee_ask_x24;
+        updates.fee_bid_x24 = fee_bid_x24;
+        let payload = serde_json::to_string(&updates)?;
+        let _: () = self.conn.set(key, payload).await?;
         Ok(())
     }
 
@@ -182,7 +200,7 @@ impl Cache {
         let keys = vec![
             self.k_reserves(),
             self.k_updates(),
-            self.k_concentration_k(),
+            self.k_max_punishment_x24(),
             self.k_block_delay(),
             self.k_paused(),
             self.k_caller_whitelisted(),
@@ -191,7 +209,7 @@ impl Cache {
         let raw: Vec<Option<String>> = self.conn.mget(keys).await?;
         let reserves = raw[0].as_ref();
         let updates = raw[1].as_ref();
-        let concentration_k = raw[2].as_ref();
+        let max_punishment_x24 = raw[2].as_ref();
         let block_delay = raw[3].as_ref();
         let paused = raw[4].as_ref();
         let caller_whitelisted = raw[5].as_ref();
@@ -200,7 +218,7 @@ impl Cache {
         let (
             Some(reserves),
             Some(updates),
-            Some(concentration_k),
+            Some(max_punishment_x24),
             Some(block_delay),
             Some(paused),
             Some(caller_whitelisted),
@@ -208,7 +226,7 @@ impl Cache {
         ) = (
             reserves,
             updates,
-            concentration_k,
+            max_punishment_x24,
             block_delay,
             paused,
             caller_whitelisted,
@@ -223,12 +241,12 @@ impl Cache {
 
         let reserve_x = parse_decimal_u128(&r.0).context("invalid cached reserveX")?;
         let reserve_y = parse_decimal_u128(&r.1).context("invalid cached reserveY")?;
-        let sqrt_price_x96 = parse_decimal_u128(&u.anchor_price)
-            .context("cached anchorPrice does not fit the math crate's u128 Q96 range")?;
+        let sqrt_price_x96 = parse_decimal_u256(&u.anchor_price)
+            .context("cached anchorPrice is not a valid U256")?;
 
-        let concentration_k = concentration_k
+        let max_punishment_x24 = max_punishment_x24
             .parse::<u32>()
-            .context("invalid cached concentrationK")?;
+            .context("invalid cached maxPunishmentX24")?;
         let block_delay = block_delay
             .parse::<u64>()
             .context("invalid cached blockDelay")?;
@@ -261,7 +279,7 @@ impl Cache {
             latest_update_block: u.block,
             reserve_x,
             reserve_y,
-            concentration_k,
+            max_punishment_x24,
             block_delay,
             paused,
             fee_multiplier,

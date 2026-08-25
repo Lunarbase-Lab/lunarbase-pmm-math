@@ -1,292 +1,445 @@
-// Package lunarbasepmm is a pure-Go port of the lunarbase-pmm-math Rust crate.
-// It implements quoteXToY / quoteYToX exactly matching the on-chain `SwapLib`
-// reference on the `fix/incident` branch (single-price Q64.96 design).
-// No external dependencies beyond github.com/holiman/uint256.
+// Package lunarbasepmm is the integer-exact Go mirror of the on-chain
+// LunarBase Pool quote path.
+//
+// The pool has a single operator-published Q64.96 sqrt-price. Swaps are quoted
+// linearly at that anchor, charge a directional Q24 fee, and leave the
+// informational next price equal to the anchor. Every quote includes the
+// triggering swap's punishment in its effective directional fee; successful
+// swaps persist that same fee. See punishment.go.
 package lunarbasepmm
 
-import "github.com/holiman/uint256"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/holiman/uint256"
+)
+
+const (
+	// Q24Scale is the conceptual Q24 value representing 100%.
+	Q24Scale uint32 = 1 << 24
+	// MaxUint24 is the largest storable uint24. For fees and maximum
+	// punishment it is a sentinel representing conceptual Q24 (100%).
+	MaxUint24 uint32 = Q24Scale - 1
+)
+
+var (
+	// ErrInvalidArgument reports a nil, aliased, or otherwise malformed Go API value.
+	ErrInvalidArgument = errors.New("invalid argument")
+	// ErrValueOutOfRange reports a value outside its Solidity ABI or storage width.
+	ErrValueOutOfRange = errors.New("value out of Solidity range")
+	// ErrDivisionByZero mirrors a Solidity division-by-zero revert.
+	ErrDivisionByZero = errors.New("division by zero")
+	// ErrMathOverflow mirrors a Solidity uint256 arithmetic revert.
+	ErrMathOverflow = errors.New("uint256 math overflow")
+	// ErrSwapImpossible identifies PeripheryLib's zero-output SwapImpossible
+	// revert. Standard-token simulations expose this as a structured status;
+	// the error remains available for callers classifying on-chain reverts.
+	ErrSwapImpossible = errors.New("swap impossible")
+	// ErrReserveTransition identifies a post-swap active reserve outside
+	// uint112. Standard-token simulations expose this as a structured status.
+	ErrReserveTransition = errors.New("reserve transition out of uint112 range")
+)
+
+// SwapDirection selects the on-chain directional fee and punishment state.
+type SwapDirection uint8
+
+const (
+	// DirectionXToY charges and widens the bid fee.
+	DirectionXToY SwapDirection = iota
+	// DirectionYToX charges and widens the ask fee.
+	DirectionYToX
+)
+
+func validateDirection(direction SwapDirection) error {
+	if direction != DirectionXToY && direction != DirectionYToX {
+		return fmt.Errorf("%w: unknown swap direction %d", ErrInvalidArgument, direction)
+	}
+	return nil
+}
 
 // PoolParams is the input snapshot needed to quote a swap.
 //
-// Widths follow the on-chain contract: SqrtPriceX96 is uint160 (Q64.96),
-// FeeAskX24 / FeeBidX24 are uint24 (Q24, where Q24 represents 100%),
-// ReserveX / ReserveY are uint112, ConcentrationK is uint32 stored as
-// Q20.12 (effective K = ConcentrationK / 2^12).
-//
-// SqrtPriceX96 is the single canonical price (operator-set; swaps do not
-// mutate it).
+// Runtime validation follows the contract widths exactly: SqrtPriceX96 is a
+// uint160 Q64.96 anchor, FeeAskX24/FeeBidX24/MaxPunishmentX24 are uint24, and
+// ReserveX/ReserveY are active uint112 reserves.
 type PoolParams struct {
-	SqrtPriceX96   *uint256.Int
-	FeeAskX24      uint32
-	FeeBidX24      uint32
-	ReserveX       *uint256.Int
-	ReserveY       *uint256.Int
-	ConcentrationK uint32
+	SqrtPriceX96     *uint256.Int
+	FeeAskX24        uint32
+	FeeBidX24        uint32
+	ReserveX         *uint256.Int
+	ReserveY         *uint256.Int
+	MaxPunishmentX24 uint32
+}
+
+func validateMutablePoolParams(params *PoolParams) error {
+	if err := ValidatePoolParams(params); err != nil {
+		return err
+	}
+	if params.SqrtPriceX96 == params.ReserveX || params.SqrtPriceX96 == params.ReserveY || params.ReserveX == params.ReserveY {
+		return fmt.Errorf("%w: mutable PoolParams numeric fields must not alias", ErrInvalidArgument)
+	}
+	return nil
 }
 
 // QuoteResult holds the output of QuoteXToY / QuoteYToX.
 //
-// AmountOut is net of Fee. SqrtPriceNext is the hypothetical post-swap
-// Q64.96 sqrt price (informational — pool storage is unchanged by a swap on
-// the fix/incident design). When the swap is rejected, AmountOut and Fee are
-// zero and SqrtPriceNext equals the input SqrtPriceX96.
+// AmountOut is net of Fee. SqrtPriceNext always equals SqrtPriceX96, including
+// rejected quotes.
 type QuoteResult struct {
 	AmountOut     *uint256.Int
 	SqrtPriceNext *uint256.Int
 	Fee           *uint256.Int
+	// EffectiveFeeX24 is the saturating directional fee used by this quote
+	// before the caller multiplier. It remains informative for rejected quotes.
+	EffectiveFeeX24 uint32
 }
 
-// concentrationQ48 writes c = mulDiv(concentrationK, r², Q12) into dst,
-// where r is wealth-normalised by cascading `mulDiv(_, sqrtP_Q96, Q96)`
-// twice to compute `reserveX * P` precisely. Saturates at Q48 (100%).
-//
-// Returns dst zeroed when amountIn, k, or sqrtPriceX96 is zero — that
-// triggers the linear-fallback path in the callers.
-//
-// Mirrors Solidity `SwapLib.concentrationQ48` bit-for-bit.
-func concentrationQ48(
-	dst, sqrtPriceX96 *uint256.Int,
-	amountIn *uint256.Int,
-	reserveX, reserveY *uint256.Int,
-	kQ12 uint32,
-	xToY bool,
-) *uint256.Int {
-	if amountIn.IsZero() || kQ12 == 0 || sqrtPriceX96.IsZero() {
-		dst.Clear()
-		return dst
+func newQuoteResult() *QuoteResult {
+	return &QuoteResult{
+		AmountOut:     new(uint256.Int),
+		SqrtPriceNext: new(uint256.Int),
+		Fee:           new(uint256.Int),
 	}
+}
 
-	// xWealthInY = mulDiv(mulDiv(reserveX, sqrtPX96, Q96), sqrtPX96, Q96)
-	//            = reserveX * P (where P = sqrtP^2)
-	var xWealthInY, totalWealthInY, scratch uint256.Int
-	mulDivDown(&scratch, reserveX, sqrtPriceX96, q96)
-	mulDivDown(&xWealthInY, &scratch, sqrtPriceX96, q96)
-	totalWealthInY.Add(&xWealthInY, reserveY)
-	if totalWealthInY.IsZero() {
-		dst.Clear()
-		return dst
+func resetQuoteResult(out *QuoteResult) {
+	out.AmountOut.Clear()
+	out.SqrtPriceNext.Clear()
+	out.Fee.Clear()
+	out.EffectiveFeeX24 = 0
+}
+
+// ValidatePoolParams checks every runtime ABI/storage width used by the Go
+// mirror. A zero anchor or zero reserve is valid, exactly as in Solidity.
+func ValidatePoolParams(params *PoolParams) error {
+	if params == nil {
+		return fmt.Errorf("%w: nil PoolParams", ErrInvalidArgument)
 	}
-
-	var amountInWealth uint256.Int
-	if xToY {
-		mulDivDown(&scratch, amountIn, sqrtPriceX96, q96)
-		mulDivDown(&amountInWealth, &scratch, sqrtPriceX96, q96)
-	} else {
-		amountInWealth.Set(amountIn)
+	if err := validateUintWidth("SqrtPriceX96", params.SqrtPriceX96, 160); err != nil {
+		return err
 	}
-
-	// r in Q48: min(amountInWealth / totalWealth, 1) * Q48.
-	var rQ48 uint256.Int
-	if !amountInWealth.Lt(&totalWealthInY) {
-		rQ48.Set(q48)
-	} else {
-		mulDivDown(&rQ48, &amountInWealth, q48, &totalWealthInY)
+	if err := validateUint24("FeeAskX24", params.FeeAskX24); err != nil {
+		return err
 	}
-
-	// r² in Q48.
-	var rSquaredQ48 uint256.Int
-	mulDivDown(&rSquaredQ48, &rQ48, &rQ48, q48)
-
-	// c = mulDiv(K_Q12, r², Q12). Saturate at Q48.
-	var kU uint256.Int
-	kU.SetUint64(uint64(kQ12))
-	mulDivDown(dst, &kU, &rSquaredQ48, q12)
-	if !dst.Lt(q48) {
-		dst.Set(q48)
+	if err := validateUint24("FeeBidX24", params.FeeBidX24); err != nil {
+		return err
 	}
-	return dst
+	if err := validateUintWidth("ReserveX", params.ReserveX, 112); err != nil {
+		return err
+	}
+	if err := validateUintWidth("ReserveY", params.ReserveY, 112); err != nil {
+		return err
+	}
+	return validateUint24("MaxPunishmentX24", params.MaxPunishmentX24)
 }
 
-// lowerBound writes sqrtPriceX96 * sqrt(1 - C) (Q64.96) into dst.
-func lowerBound(dst, sqrtPriceX96 *uint256.Int, cQ48 uint64) *uint256.Int {
-	var oneMinusC, sqrtOneMinusC uint256.Int
-	oneMinusC.Sub(q48, oneMinusC.SetUint64(cQ48))
-	isqrt(&sqrtOneMinusC, &oneMinusC)
-	return mulDivDown(dst, sqrtPriceX96, &sqrtOneMinusC, q24)
+func validateUintWidth(name string, value *uint256.Int, bits int) error {
+	if value == nil {
+		return fmt.Errorf("%w: nil %s", ErrInvalidArgument, name)
+	}
+	if value.BitLen() > bits {
+		return fmt.Errorf("%w: %s exceeds uint%d", ErrValueOutOfRange, name, bits)
+	}
+	return nil
 }
 
-// upperBound writes sqrtPriceX96 / sqrt(1 - C) (Q64.96) into dst.
-func upperBound(dst, sqrtPriceX96 *uint256.Int, cQ48 uint64) *uint256.Int {
-	var oneMinusC, sqrtOneMinusC uint256.Int
-	oneMinusC.Sub(q48, oneMinusC.SetUint64(cQ48))
-	isqrt(&sqrtOneMinusC, &oneMinusC)
-	return mulDivDown(dst, sqrtPriceX96, q24, &sqrtOneMinusC)
+func validateUint24(name string, value uint32) error {
+	if value > MaxUint24 {
+		return fmt.Errorf("%w: %s exceeds uint24", ErrValueOutOfRange, name)
+	}
+	return nil
 }
 
-// liquidityY writes reserveY * Q96 / (sqrtPriceX96 - pBid) into dst.
-func liquidityY(dst, sqrtPriceX96, pBid, reserveY *uint256.Int) *uint256.Int {
-	var denom uint256.Int
-	denom.Sub(sqrtPriceX96, pBid)
-	return mulDivDown(dst, reserveY, q96, &denom)
+func validateQuoteDestination(out *QuoteResult, params *PoolParams) error {
+	if out == nil || out.AmountOut == nil || out.SqrtPriceNext == nil || out.Fee == nil {
+		return fmt.Errorf("%w: QuoteResult and all numeric fields must be non-nil", ErrInvalidArgument)
+	}
+	if out.AmountOut == out.SqrtPriceNext || out.AmountOut == out.Fee || out.SqrtPriceNext == out.Fee {
+		return fmt.Errorf("%w: QuoteResult fields must not alias", ErrInvalidArgument)
+	}
+	if params != nil &&
+		(out.AmountOut == params.SqrtPriceX96 || out.AmountOut == params.ReserveX || out.AmountOut == params.ReserveY ||
+			out.SqrtPriceNext == params.SqrtPriceX96 || out.SqrtPriceNext == params.ReserveX || out.SqrtPriceNext == params.ReserveY ||
+			out.Fee == params.SqrtPriceX96 || out.Fee == params.ReserveX || out.Fee == params.ReserveY) {
+		return fmt.Errorf("%w: QuoteResult must not alias PoolParams", ErrInvalidArgument)
+	}
+	return nil
 }
 
-// liquidityX writes reserveX * (sqrtPriceX96 * pAsk / Q96) / (pAsk - sqrtPriceX96)
-// into dst. Mirrors `SwapLib.Lx` after the Q64.96 migration.
-func liquidityX(dst, sqrtPriceX96, pAsk, reserveX *uint256.Int) *uint256.Int {
-	var priceProductX96, diff uint256.Int
-	mulDivDown(&priceProductX96, sqrtPriceX96, pAsk, q96)
-	diff.Sub(pAsk, sqrtPriceX96)
-	return mulDivDown(dst, reserveX, &priceProductX96, &diff)
+func validateQuoteCall(out *QuoteResult, params *PoolParams, amountIn, feeMultiplier *uint256.Int) error {
+	// Validate the destination first. Once this succeeds it is safe for the
+	// checked Into APIs to clear a previous result on every later error without
+	// accidentally mutating aliased inputs or pool state.
+	if err := validateQuoteDestination(out, params); err != nil {
+		return err
+	}
+	if amountIn != nil && (out.AmountOut == amountIn || out.SqrtPriceNext == amountIn || out.Fee == amountIn) {
+		return fmt.Errorf("%w: QuoteResult must not alias amountIn", ErrInvalidArgument)
+	}
+	if feeMultiplier != nil && (out.AmountOut == feeMultiplier || out.SqrtPriceNext == feeMultiplier || out.Fee == feeMultiplier) {
+		return fmt.Errorf("%w: QuoteResult must not alias feeMultiplier", ErrInvalidArgument)
+	}
+	resetQuoteResult(out)
+	if err := ValidatePoolParams(params); err != nil {
+		return err
+	}
+	if amountIn == nil {
+		return fmt.Errorf("%w: nil amountIn", ErrInvalidArgument)
+	}
+	if feeMultiplier == nil {
+		return fmt.Errorf("%w: nil feeMultiplier", ErrInvalidArgument)
+	}
+	return nil
 }
 
-// QuoteXToY is an exact port of `SwapLib._quoteXToY` on the fix/incident
-// branch. Allocates a fresh `QuoteResult` per call. For tight loops use
-// [QuoteXToYInto].
+// QuoteXToY quotes an exact-input X -> Y swap with feeMultiplier=1. It keeps
+// the ergonomic API and panics only for an invalid off-chain domain or a
+// Solidity-equivalent arithmetic revert. Use QuoteXToYChecked when inputs are
+// not already ABI-validated.
 func QuoteXToY(params *PoolParams, dx *uint256.Int) *QuoteResult {
-	out := &QuoteResult{
-		AmountOut:     new(uint256.Int),
-		SqrtPriceNext: new(uint256.Int),
-		Fee:           new(uint256.Int),
+	out, err := QuoteXToYChecked(params, dx)
+	if err != nil {
+		panic(err)
 	}
-	QuoteXToYInto(out, params, dx)
 	return out
 }
 
-// QuoteYToX mirrors [QuoteXToY] for the reverse direction.
+// QuoteYToX is the reverse-direction counterpart of QuoteXToY.
 func QuoteYToX(params *PoolParams, dy *uint256.Int) *QuoteResult {
-	out := &QuoteResult{
-		AmountOut:     new(uint256.Int),
-		SqrtPriceNext: new(uint256.Int),
-		Fee:           new(uint256.Int),
+	out, err := QuoteYToXChecked(params, dy)
+	if err != nil {
+		panic(err)
 	}
-	QuoteYToXInto(out, params, dy)
 	return out
+}
+
+// QuoteXToYWithMultiplier quotes X -> Y with the caller's fee multiplier.
+// Multipliers 0 and 1 both select the base-fee path, matching SwapLib.applyFee.
+func QuoteXToYWithMultiplier(params *PoolParams, dx, feeMultiplier *uint256.Int) *QuoteResult {
+	out, err := QuoteXToYWithMultiplierChecked(params, dx, feeMultiplier)
+	if err != nil {
+		panic(err)
+	}
+	return out
+}
+
+// QuoteYToXWithMultiplier is the reverse-direction multiplier variant.
+func QuoteYToXWithMultiplier(params *PoolParams, dy, feeMultiplier *uint256.Int) *QuoteResult {
+	out, err := QuoteYToXWithMultiplierChecked(params, dy, feeMultiplier)
+	if err != nil {
+		panic(err)
+	}
+	return out
+}
+
+// QuoteXToYChecked is the allocating, error-returning quote API.
+func QuoteXToYChecked(params *PoolParams, dx *uint256.Int) (*QuoteResult, error) {
+	return QuoteXToYWithMultiplierChecked(params, dx, one)
+}
+
+// QuoteYToXChecked is the allocating, error-returning quote API.
+func QuoteYToXChecked(params *PoolParams, dy *uint256.Int) (*QuoteResult, error) {
+	return QuoteYToXWithMultiplierChecked(params, dy, one)
+}
+
+// QuoteXToYWithMultiplierChecked allocates a result and returns arithmetic or
+// runtime-domain reverts as Go errors.
+func QuoteXToYWithMultiplierChecked(params *PoolParams, dx, feeMultiplier *uint256.Int) (*QuoteResult, error) {
+	out := newQuoteResult()
+	if err := QuoteXToYWithMultiplierIntoChecked(out, params, dx, feeMultiplier); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// QuoteYToXWithMultiplierChecked is the reverse-direction checked variant.
+func QuoteYToXWithMultiplierChecked(params *PoolParams, dy, feeMultiplier *uint256.Int) (*QuoteResult, error) {
+	out := newQuoteResult()
+	if err := QuoteYToXWithMultiplierIntoChecked(out, params, dy, feeMultiplier); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // QuoteXToYInto computes the quote and writes the result into out.
 // Allocation-free on the hot path. The caller owns out and its three
-// `*uint256.Int` fields; all of them must be non-nil.
+// distinct `*uint256.Int` fields; they must not alias PoolParams.
 func QuoteXToYInto(out *QuoteResult, params *PoolParams, dx *uint256.Int) *QuoteResult {
-	var (
-		cQ48      uint256.Int
-		pBid      uint256.Int
-		liquidity uint256.Int
-		maxNetDx  uint256.Int
-		pNext     uint256.Int
-		dy        uint256.Int
-		feeQ24    uint256.Int
-	)
-
-	concentrationQ48(&cQ48, params.SqrtPriceX96, dx,
-		params.ReserveX, params.ReserveY, params.ConcentrationK, true)
-	if cQ48.IsZero() {
-		linearXToY(out, params, dx)
-		return out
+	if err := QuoteXToYIntoChecked(out, params, dx); err != nil {
+		panic(err)
 	}
-	if !cQ48.Lt(q48) {
-		return writeRejected(out, params)
-	}
-
-	lowerBound(&pBid, params.SqrtPriceX96, cQ48.Uint64())
-	if !params.SqrtPriceX96.Gt(&pBid) {
-		return writeRejected(out, params)
-	}
-	liquidityY(&liquidity, params.SqrtPriceX96, &pBid, params.ReserveY)
-
-	getAmountXDelta(&maxNetDx, &pBid, params.SqrtPriceX96, &liquidity, false)
-	if dx.Gt(&maxNetDx) {
-		return writeRejected(out, params)
-	}
-
-	getNextSqrtPriceFromAmountXRoundingUp(&pNext, params.SqrtPriceX96, &liquidity, dx)
-	getAmountYDelta(&dy, params.SqrtPriceX96, &pNext, &liquidity, false)
-
-	feeQ24.SetUint64(uint64(params.FeeBidX24))
-	mulDivDown(out.Fee, &dy, &feeQ24, q24)
-	out.AmountOut.Sub(&dy, out.Fee)
-	out.SqrtPriceNext.Set(&pNext)
 	return out
 }
 
 // QuoteYToXInto mirrors [QuoteXToYInto] for the reverse direction.
 func QuoteYToXInto(out *QuoteResult, params *PoolParams, dy *uint256.Int) *QuoteResult {
-	var (
-		cQ48      uint256.Int
-		pAsk      uint256.Int
-		liquidity uint256.Int
-		maxNetDy  uint256.Int
-		pNext     uint256.Int
-		dxOut     uint256.Int
-		feeQ24    uint256.Int
-	)
-
-	concentrationQ48(&cQ48, params.SqrtPriceX96, dy,
-		params.ReserveX, params.ReserveY, params.ConcentrationK, false)
-	if cQ48.IsZero() {
-		linearYToX(out, params, dy)
-		return out
+	if err := QuoteYToXIntoChecked(out, params, dy); err != nil {
+		panic(err)
 	}
-	if !cQ48.Lt(q48) {
-		return writeRejected(out, params)
-	}
-
-	upperBound(&pAsk, params.SqrtPriceX96, cQ48.Uint64())
-	if !params.SqrtPriceX96.Lt(&pAsk) {
-		return writeRejected(out, params)
-	}
-	liquidityX(&liquidity, params.SqrtPriceX96, &pAsk, params.ReserveX)
-
-	getAmountYDelta(&maxNetDy, params.SqrtPriceX96, &pAsk, &liquidity, false)
-	if dy.Gt(&maxNetDy) {
-		return writeRejected(out, params)
-	}
-
-	getNextSqrtPriceFromAmountYRoundingDown(&pNext, params.SqrtPriceX96, &liquidity, dy)
-	getAmountXDelta(&dxOut, params.SqrtPriceX96, &pNext, &liquidity, false)
-
-	feeQ24.SetUint64(uint64(params.FeeAskX24))
-	mulDivDown(out.Fee, &dxOut, &feeQ24, q24)
-	out.AmountOut.Sub(&dxOut, out.Fee)
-	out.SqrtPriceNext.Set(&pNext)
 	return out
 }
 
-// linearXToY implements the cQ48 == 0 fallback for X → Y:
-// dy = mulDiv(mulDiv(dx, sqrtPriceX96, Q96), sqrtPriceX96, Q96),
-// fee on dy, pNext = sqrtPriceX96.
-func linearXToY(out *QuoteResult, params *PoolParams, dx *uint256.Int) {
-	var dyGross, scratch, feeQ24 uint256.Int
-	mulDivDown(&scratch, dx, params.SqrtPriceX96, q96)
-	mulDivDown(&dyGross, &scratch, params.SqrtPriceX96, q96)
-	if dyGross.IsZero() || dyGross.Gt(params.ReserveY) {
-		writeRejected(out, params)
-		return
+// QuoteXToYWithMultiplierInto is the allocation-free multiplier API.
+func QuoteXToYWithMultiplierInto(out *QuoteResult, params *PoolParams, dx, feeMultiplier *uint256.Int) *QuoteResult {
+	if err := QuoteXToYWithMultiplierIntoChecked(out, params, dx, feeMultiplier); err != nil {
+		panic(err)
 	}
-
-	feeQ24.SetUint64(uint64(params.FeeBidX24))
-	mulDivDown(out.Fee, &dyGross, &feeQ24, q24)
-	out.AmountOut.Sub(&dyGross, out.Fee)
-	out.SqrtPriceNext.Set(params.SqrtPriceX96)
+	return out
 }
 
-// linearYToX is the cQ48 == 0 fallback for Y → X:
-// dx = mulDiv(mulDiv(dy, Q96, sqrtPriceX96), Q96, sqrtPriceX96),
-// fee on dx, pNext = sqrtPriceX96.
-func linearYToX(out *QuoteResult, params *PoolParams, dy *uint256.Int) {
+// QuoteYToXWithMultiplierInto is the reverse-direction allocation-free
+// multiplier API.
+func QuoteYToXWithMultiplierInto(out *QuoteResult, params *PoolParams, dy, feeMultiplier *uint256.Int) *QuoteResult {
+	if err := QuoteYToXWithMultiplierIntoChecked(out, params, dy, feeMultiplier); err != nil {
+		panic(err)
+	}
+	return out
+}
+
+// QuoteXToYIntoChecked computes the quote and returns Solidity-equivalent
+// arithmetic reverts as Go errors.
+func QuoteXToYIntoChecked(out *QuoteResult, params *PoolParams, dx *uint256.Int) error {
+	return QuoteXToYWithMultiplierIntoChecked(out, params, dx, one)
+}
+
+// QuoteYToXIntoChecked is the reverse-direction checked Into API.
+func QuoteYToXIntoChecked(out *QuoteResult, params *PoolParams, dy *uint256.Int) error {
+	return QuoteYToXWithMultiplierIntoChecked(out, params, dy, one)
+}
+
+// QuoteXToYWithMultiplierIntoChecked mirrors SwapLib.quoteXToY. The triggering
+// swap's punishment is included in the effective bid fee before applyFee, and
+// the price conversion preserves Solidity's two separate floor operations.
+func QuoteXToYWithMultiplierIntoChecked(out *QuoteResult, params *PoolParams, dx, feeMultiplier *uint256.Int) error {
+	_, _, err := quoteXToYWithMultiplierIntoChecked(out, params, dx, feeMultiplier)
+	return err
+}
+
+func quoteXToYWithMultiplierIntoChecked(
+	out *QuoteResult,
+	params *PoolParams,
+	dx, feeMultiplier *uint256.Int,
+) (desiredPunishmentX24, effectiveFeeX24 uint32, err error) {
+	if err := validateQuoteCall(out, params, dx, feeMultiplier); err != nil {
+		return 0, 0, err
+	}
+	defer func() {
+		if err != nil {
+			resetQuoteResult(out)
+		}
+	}()
+
+	desiredPunishmentX24, effectiveFeeX24, err = immediateFeeX24Validated(params, dx, DirectionXToY)
+	if err != nil {
+		return 0, 0, err
+	}
+	out.EffectiveFeeX24 = effectiveFeeX24
+
+	var scratch, grossOutput, amountOut, fee uint256.Int
+	if err := mulDivDownChecked(&scratch, dx, params.SqrtPriceX96, q96); err != nil {
+		return 0, 0, err
+	}
+	if err := mulDivDownChecked(&grossOutput, &scratch, params.SqrtPriceX96, q96); err != nil {
+		return 0, 0, err
+	}
+	if grossOutput.IsZero() || grossOutput.Gt(params.ReserveY) {
+		writeRejected(out, params.SqrtPriceX96)
+		return desiredPunishmentX24, effectiveFeeX24, nil
+	}
+	if err := applyFeeInto(&amountOut, &fee, &grossOutput, effectiveFeeX24, feeMultiplier); err != nil {
+		return 0, 0, err
+	}
+	writeQuote(out, &amountOut, params.SqrtPriceX96, &fee)
+	return desiredPunishmentX24, effectiveFeeX24, nil
+}
+
+// QuoteYToXWithMultiplierIntoChecked mirrors SwapLib.quoteYToX and applies the
+// immediate punishment to the effective ask fee.
+func QuoteYToXWithMultiplierIntoChecked(out *QuoteResult, params *PoolParams, dy, feeMultiplier *uint256.Int) error {
+	_, _, err := quoteYToXWithMultiplierIntoChecked(out, params, dy, feeMultiplier)
+	return err
+}
+
+func quoteYToXWithMultiplierIntoChecked(
+	out *QuoteResult,
+	params *PoolParams,
+	dy, feeMultiplier *uint256.Int,
+) (desiredPunishmentX24, effectiveFeeX24 uint32, err error) {
+	if err := validateQuoteCall(out, params, dy, feeMultiplier); err != nil {
+		return 0, 0, err
+	}
+	defer func() {
+		if err != nil {
+			resetQuoteResult(out)
+		}
+	}()
+
+	desiredPunishmentX24, effectiveFeeX24, err = immediateFeeX24Validated(params, dy, DirectionYToX)
+	if err != nil {
+		return 0, 0, err
+	}
+	out.EffectiveFeeX24 = effectiveFeeX24
 	if params.SqrtPriceX96.IsZero() {
-		writeRejected(out, params)
-		return
+		writeRejected(out, params.SqrtPriceX96)
+		return desiredPunishmentX24, effectiveFeeX24, nil
 	}
 
-	var dxGross, scratch, feeQ24 uint256.Int
-	mulDivDown(&scratch, dy, q96, params.SqrtPriceX96)
-	mulDivDown(&dxGross, &scratch, q96, params.SqrtPriceX96)
-	if dxGross.IsZero() || dxGross.Gt(params.ReserveX) {
-		writeRejected(out, params)
-		return
+	var scratch, grossOutput, amountOut, fee uint256.Int
+	if err := mulDivDownChecked(&scratch, dy, q96, params.SqrtPriceX96); err != nil {
+		return 0, 0, err
 	}
-
-	feeQ24.SetUint64(uint64(params.FeeAskX24))
-	mulDivDown(out.Fee, &dxGross, &feeQ24, q24)
-	out.AmountOut.Sub(&dxGross, out.Fee)
-	out.SqrtPriceNext.Set(params.SqrtPriceX96)
+	if err := mulDivDownChecked(&grossOutput, &scratch, q96, params.SqrtPriceX96); err != nil {
+		return 0, 0, err
+	}
+	if grossOutput.IsZero() || grossOutput.Gt(params.ReserveX) {
+		writeRejected(out, params.SqrtPriceX96)
+		return desiredPunishmentX24, effectiveFeeX24, nil
+	}
+	if err := applyFeeInto(&amountOut, &fee, &grossOutput, effectiveFeeX24, feeMultiplier); err != nil {
+		return 0, 0, err
+	}
+	writeQuote(out, &amountOut, params.SqrtPriceX96, &fee)
+	return desiredPunishmentX24, effectiveFeeX24, nil
 }
 
-// writeRejected fills out with a zero-output result preserving the input
-// sqrt-price.
-func writeRejected(out *QuoteResult, params *PoolParams) *QuoteResult {
+func applyFeeInto(amountOut, fee, grossOutput *uint256.Int, feeQ24 uint32, feeMultiplier *uint256.Int) error {
+	if feeQ24 == MaxUint24 {
+		amountOut.Clear()
+		fee.Set(grossOutput)
+		return nil
+	}
+
+	var feeValue, baseFee uint256.Int
+	feeValue.SetUint64(uint64(feeQ24))
+	if err := mulDivDownChecked(&baseFee, grossOutput, &feeValue, q24); err != nil {
+		return err
+	}
+	if !feeMultiplier.Gt(one) || baseFee.IsZero() {
+		fee.Set(&baseFee)
+		amountOut.Sub(grossOutput, &baseFee)
+		return nil
+	}
+
+	var scaledFee uint256.Int
+	if _, overflow := scaledFee.MulOverflow(&baseFee, feeMultiplier); overflow || !scaledFee.Lt(grossOutput) {
+		amountOut.Clear()
+		fee.Set(grossOutput)
+		return nil
+	}
+	fee.Set(&scaledFee)
+	amountOut.Sub(grossOutput, &scaledFee)
+	return nil
+}
+
+func writeQuote(out *QuoteResult, amountOut, anchor, fee *uint256.Int) {
+	out.AmountOut.Set(amountOut)
+	out.SqrtPriceNext.Set(anchor)
+	out.Fee.Set(fee)
+}
+
+func writeRejected(out *QuoteResult, anchor *uint256.Int) {
 	out.AmountOut.Clear()
+	out.SqrtPriceNext.Set(anchor)
 	out.Fee.Clear()
-	out.SqrtPriceNext.Set(params.SqrtPriceX96)
-	return out
 }

@@ -3,137 +3,372 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
+const binding = await import(process.env.PMM_MATH_BINDING ?? "../wrapper.js");
+const {
+  SwapSimulationStatus,
   priceToSqrtPriceX96,
   price_to_sqrt_price_x96,
   quoteXToY,
   quoteYToX,
+  simulateXToY,
+  simulateYToX,
   sqrtPriceX96ToPrice,
   sqrt_price_x96_to_price,
-} from "../wrapper.js";
+} = binding;
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const vectorsDir = path.join(__dirname, "..", "..", "..", "rust", "lunarbase-pmm-math");
-const deterministicVectorsPath = path.join(vectorsDir, "deterministic_vectors.jsonl");
-const fuzzVectorsPath = path.join(vectorsDir, "fuzz_vectors.jsonl");
+const directory = path.dirname(fileURLToPath(import.meta.url));
+const vectorsDirectory =
+  process.env.PMM_MATH_VECTORS_DIR ??
+  path.join(directory, "..", "..", "..", "rust", "lunarbase-pmm-math");
+const vectorFiles = [
+  path.join(vectorsDirectory, "deterministic_vectors.jsonl"),
+  path.join(vectorsDirectory, "fuzz_vectors.jsonl"),
+];
 
-function readJsonl(filePath) {
-  try {
-    return fs
-      .readFileSync(filePath, "utf-8")
-      .split("\n")
-      .filter((line) => line.trim().length > 0)
-      .map((line) => JSON.parse(line));
-  } catch {
-    return [];
-  }
+const INTEGER_FIELDS = [
+  "anchorPrice",
+  "feeAskX24",
+  "feeBidX24",
+  "reserveX",
+  "reserveY",
+  "maxPunishmentX24",
+  "feeMultiplier",
+  "amountIn",
+  "amountOut",
+  "pNext",
+  "feeAmount",
+  "desiredPunishmentX24",
+  "effectiveFeeX24",
+  "appliedPunishmentX24",
+  "feeAskX24After",
+  "feeBidX24After",
+  "reserveXAfter",
+  "reserveYAfter",
+];
+const UPDATE_INTEGER_FIELDS = [
+  "anchorPrice",
+  "feeAskX24",
+  "feeBidX24",
+  "anchorPriceAfter",
+  "feeAskX24After",
+  "feeBidX24After",
+  "reserveXAfter",
+  "reserveYAfter",
+  "maxPunishmentX24After",
+];
+const OUTCOME_METADATA = Object.freeze({
+  Applied: {
+    selector: "0x00000000",
+    className: "None",
+    status: SwapSimulationStatus.Applied,
+  },
+  SwapImpossible: {
+    selector: "0x4a45e749",
+    className: "SwapImpossible()",
+    status: SwapSimulationStatus.SwapImpossible,
+  },
+  ReserveTransitionOverflow: {
+    selector: "0x6dfcc650",
+    className: "SafeCastOverflowedUintDowncast(uint8,uint256)",
+    status: SwapSimulationStatus.ReserveTransitionOverflow,
+  },
+  MathMulDivRevert: {
+    selector: "0x4e487b71",
+    className: "Panic(0x11)",
+    status: null,
+  },
+});
+
+function assertCanonicalDecimalString(value, label) {
+  assert.equal(typeof value, "string", `${label} must be a decimal string`);
+  assert.match(value, /^(0|[1-9][0-9]*)$/, `${label} must be canonical decimal`);
 }
 
-const deterministicVectors = readJsonl(deterministicVectorsPath);
-const fuzzVectors = readJsonl(fuzzVectorsPath);
+function validateVector(row, label) {
+  assert.equal(row.schemaVersion, 4, `${label}: schemaVersion`);
+  assert.ok(row.dir === "xToY" || row.dir === "yToX", `${label}: dir`);
+  if (row.seed !== undefined) assertCanonicalDecimalString(row.seed, `${label}: seed`);
+  for (const field of INTEGER_FIELDS) {
+    assertCanonicalDecimalString(row[field], `${label}: ${field}`);
+  }
+  if (row.update !== undefined) {
+    assert.equal(typeof row.update, "object", `${label}: update object`);
+    assert.notEqual(row.update, null, `${label}: update object`);
+    for (const field of UPDATE_INTEGER_FIELDS) {
+      assertCanonicalDecimalString(row.update[field], `${label}: update.${field}`);
+    }
+  }
 
-/**
- * Build the `QuoteParams` shape from a JSONL row (Q64.96 design).
- * Each row exercises one direction; the JSONL `fee` field carries the
- * directionally-relevant Q24 fee (bid for xToY, ask for yToX), so the other
- * side is a don't-care set to 0.
- */
+  const metadata = OUTCOME_METADATA[row.outcome];
+  assert.ok(metadata, `${label}: unsupported outcome ${row.outcome}`);
+  assert.equal(row.revertSelector, metadata.selector, `${label}: revertSelector`);
+  assert.equal(row.revertClass, metadata.className, `${label}: revertClass`);
+  return row;
+}
+
+function readJsonl(filePath) {
+  const contents = fs.readFileSync(filePath, "utf8");
+  const rows = contents
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .map((line, index) => {
+      let row;
+      try {
+        row = JSON.parse(line);
+      } catch (error) {
+        throw new Error(`${filePath}:${index + 1}: invalid JSON: ${error.message}`);
+      }
+      return validateVector(row, `${filePath}:${index + 1}`);
+    });
+  assert.ok(rows.length > 0, `${filePath} must contain at least one vector`);
+  return rows;
+}
+
 function paramsFromVector(vector) {
-  const isXToY = vector.dir === "xToY";
   return {
-    sqrtPriceX96: String(vector.pX96),
-    feeAskX24: isXToY ? 0 : Number(vector.fee),
-    feeBidX24: isXToY ? Number(vector.fee) : 0,
-    reserveX: String(vector.resX),
-    reserveY: String(vector.resY),
-    concentrationK: Number(vector.k),
-    amountIn: String(isXToY ? vector.dx : vector.dy),
+    sqrtPriceX96: vector.anchorPrice,
+    feeAskX24: Number(vector.feeAskX24),
+    feeBidX24: Number(vector.feeBidX24),
+    reserveX: vector.reserveX,
+    reserveY: vector.reserveY,
+    maxPunishmentX24: Number(vector.maxPunishmentX24),
+    amountIn: vector.amountIn,
+    feeMultiplier: vector.feeMultiplier,
   };
 }
 
-describe("deterministic vectors (from Solidity)", () => {
-  if (deterministicVectors.length === 0) {
-    it("(skipped — no deterministic_vectors.jsonl)", () => {});
+function assertExactMathMulDivError(operation, label) {
+  assert.throws(operation, (error) => {
+    assert.equal(error.message, "mulDiv result exceeds uint256", `${label}: error message`);
+    return true;
+  });
+}
+
+function assertUpdateVector(vector, simulation, quoteOperation, label) {
+  const update = vector.update;
+  if (update === undefined) return;
+
+  assert.equal(vector.outcome, "Applied", `${label}: update outcome`);
+  assert.equal(update.anchorPriceAfter, update.anchorPrice, `${label}: updated anchor`);
+  assert.equal(update.feeAskX24After, update.feeAskX24, `${label}: updated ask`);
+  assert.equal(update.feeBidX24After, update.feeBidX24, `${label}: updated bid`);
+  assert.equal(update.reserveXAfter, simulation.reserveXAfter, `${label}: update reserve X`);
+  assert.equal(update.reserveYAfter, simulation.reserveYAfter, `${label}: update reserve Y`);
+  assert.equal(
+    update.maxPunishmentX24After,
+    vector.maxPunishmentX24,
+    `${label}: update max punishment`,
+  );
+
+  const postUpdateQuote = quoteOperation({
+    sqrtPriceX96: update.anchorPriceAfter,
+    feeAskX24: Number(update.feeAskX24After),
+    feeBidX24: Number(update.feeBidX24After),
+    reserveX: update.reserveXAfter,
+    reserveY: update.reserveYAfter,
+    maxPunishmentX24: Number(update.maxPunishmentX24After),
+    amountIn: "0",
+    feeMultiplier: "1",
+  });
+  assert.equal(postUpdateQuote.sqrtPriceNext, update.anchorPriceAfter, `${label}: update replay`);
+}
+
+function assertVector(vector, index, source) {
+  const params = paramsFromVector(vector);
+  const quoteOperation = vector.dir === "xToY" ? quoteXToY : quoteYToX;
+  const simulateOperation = vector.dir === "xToY" ? simulateXToY : simulateYToX;
+  const label = `${source}:${index + 1} ${vector.name ?? vector.seed ?? vector.dir}`;
+
+  if (vector.outcome === "MathMulDivRevert") {
+    assertExactMathMulDivError(() => quoteOperation(params), `${label}: quote`);
+    assertExactMathMulDivError(() => simulateOperation(params), `${label}: simulation`);
+    assert.equal(vector.update, undefined, `${label}: reverted update`);
+    assert.equal(vector.desiredPunishmentX24, "0", `${label}: desired punishment`);
+    assert.equal(vector.appliedPunishmentX24, "0", `${label}: applied punishment`);
+    assert.equal(vector.effectiveFeeX24, "0", `${label}: effective fee`);
+    assert.equal(vector.feeAskX24After, vector.feeAskX24, `${label}: ask rollback`);
+    assert.equal(vector.feeBidX24After, vector.feeBidX24, `${label}: bid rollback`);
+    assert.equal(vector.reserveXAfter, vector.reserveX, `${label}: X rollback`);
+    assert.equal(vector.reserveYAfter, vector.reserveY, `${label}: Y rollback`);
     return;
   }
 
-  for (const vector of deterministicVectors) {
-    it(`${vector.name}: ${vector.dir}`, () => {
-      const params = paramsFromVector(vector);
-      const result = vector.dir === "xToY" ? quoteXToY(params) : quoteYToX(params);
-      const expectedOut = vector.dir === "xToY" ? String(vector.dy) : String(vector.dx);
+  const quote = quoteOperation(params);
+  const simulation = simulateOperation(params);
+  const metadata = OUTCOME_METADATA[vector.outcome];
 
-      assert.equal(result.amountOut, expectedOut, `${vector.name}: amountOut mismatch`);
-      assert.equal(result.sqrtPriceNext, String(vector.pNext), `${vector.name}: sqrtPriceNext mismatch`);
-      assert.equal(result.fee, String(vector.feeAmt), `${vector.name}: fee mismatch`);
+  assert.equal(quote.amountOut, vector.amountOut, `${label}: amountOut`);
+  assert.equal(quote.sqrtPriceNext, vector.pNext, `${label}: pNext`);
+  assert.equal(quote.fee, vector.feeAmount, `${label}: feeAmount`);
+  assert.equal(quote.effectiveFeeX24, Number(vector.effectiveFeeX24), `${label}: effectiveFeeX24`);
+
+  assert.equal(simulation.amountOut, vector.amountOut, `${label}: simulated amountOut`);
+  assert.equal(simulation.sqrtPriceNext, vector.pNext, `${label}: simulated pNext`);
+  assert.equal(simulation.fee, vector.feeAmount, `${label}: simulated feeAmount`);
+  assert.equal(
+    simulation.effectiveFeeX24,
+    Number(vector.effectiveFeeX24),
+    `${label}: simulated effectiveFeeX24`,
+  );
+  assert.equal(simulation.status, metadata.status, `${label}: exact outcome`);
+  assert.equal(simulation.executable, vector.outcome === "Applied", `${label}: executable`);
+  assert.equal(
+    simulation.desiredPunishmentX24,
+    Number(vector.desiredPunishmentX24),
+    `${label}: desiredPunishmentX24`,
+  );
+  assert.equal(
+    simulation.appliedPunishmentX24,
+    Number(vector.appliedPunishmentX24),
+    `${label}: appliedPunishmentX24`,
+  );
+  assert.equal(
+    simulation.feeAskX24After,
+    Number(vector.feeAskX24After),
+    `${label}: feeAskX24After`,
+  );
+  assert.equal(
+    simulation.feeBidX24After,
+    Number(vector.feeBidX24After),
+    `${label}: feeBidX24After`,
+  );
+  assert.equal(simulation.reserveXAfter, vector.reserveXAfter, `${label}: reserveXAfter`);
+  assert.equal(simulation.reserveYAfter, vector.reserveYAfter, `${label}: reserveYAfter`);
+  assertUpdateVector(vector, simulation, quoteOperation, label);
+}
+
+for (const vectorFile of vectorFiles) {
+  describe(`Solidity parity: ${path.basename(vectorFile)}`, () => {
+    const vectors = readJsonl(vectorFile);
+    it(`matches all ${vectors.length} vectors bit-for-bit`, () => {
+      for (const [index, vector] of vectors.entries()) {
+        assertVector(vector, index, vectorFile);
+      }
     });
-  }
+  });
+}
+
+const Q96 = "79228162514264337593543950336";
+const MAX_U24 = 16_777_215;
+const BASE_PARAMS = {
+  sqrtPriceX96: Q96,
+  feeAskX24: 0,
+  feeBidX24: 0,
+  reserveX: "1000000",
+  reserveY: "1000000",
+  maxPunishmentX24: 0,
+  amountIn: "1000",
+};
+
+describe("immediate-punishment split regression", () => {
+  it("matches the Solidity single versus ten-chunk outputs exactly", () => {
+    const total = "1000000000000000000000000";
+    const chunk = "100000000000000000000000";
+    const base = {
+      sqrtPriceX96: Q96,
+      feeAskX24: 0,
+      feeBidX24: 0,
+      reserveX: total,
+      reserveY: total,
+      maxPunishmentX24: MAX_U24,
+      feeMultiplier: "1",
+    };
+
+    const single = simulateXToY({ ...base, amountIn: total });
+    assert.equal(single.status, SwapSimulationStatus.Applied);
+    assert.equal(single.amountOut, "500000000000000000000000");
+    assert.equal(single.feeBidX24After, 8_388_608);
+
+    let splitParams = { ...base, amountIn: chunk };
+    let splitTotalOut = 0n;
+    let finalSplit;
+    for (let i = 0; i < 10; i += 1) {
+      finalSplit = simulateXToY(splitParams);
+      assert.equal(finalSplit.status, SwapSimulationStatus.Applied);
+      splitTotalOut += BigInt(finalSplit.amountOut);
+      splitParams = {
+        ...splitParams,
+        feeAskX24: finalSplit.feeAskX24After,
+        feeBidX24: finalSplit.feeBidX24After,
+        reserveX: finalSplit.reserveXAfter,
+        reserveY: finalSplit.reserveYAfter,
+      };
+    }
+
+    assert.equal(splitTotalOut, 724_999_934_434_890_747_070_315n);
+    assert.equal(finalSplit.feeBidX24After, 8_388_610);
+    assert.ok(splitTotalOut > BigInt(single.amountOut));
+  });
 });
 
-// Q64.96 sqrt-price for price = 1.0 (`2^96`). Used by the edge-case suite.
-const SQRT_PRICE_X96_ONE = "79228162514264337593543950336";
-
-describe("edge cases", () => {
-  it("returns zero output for zero reserves", () => {
-    const result = quoteXToY({
-      sqrtPriceX96: SQRT_PRICE_X96_ONE, // Q96 = price 1.0
-      feeAskX24: 0,
-      feeBidX24: 838860, // 5% in Q24
-      reserveX: "0",
-      reserveY: "0",
-      concentrationK: 5000,
-      amountIn: "1000000000000000000",
-    });
+describe("strict JavaScript boundary", () => {
+  it("implements the Q24 full-fee sentinel exactly", () => {
+    const result = quoteXToY({ ...BASE_PARAMS, feeBidX24: MAX_U24 });
+    const simulation = simulateXToY({ ...BASE_PARAMS, feeBidX24: MAX_U24 });
     assert.equal(result.amountOut, "0");
+    assert.equal(result.fee, "1000");
+    assert.equal(result.effectiveFeeX24, MAX_U24);
+    assert.equal(result.sqrtPriceNext, Q96);
+    assert.equal(simulation.executable, false);
+    assert.equal(simulation.status, SwapSimulationStatus.SwapImpossible);
   });
 
+  for (const [name, override] of [
+    ["empty amount", { amountIn: "" }],
+    ["empty hex amount", { amountIn: "0x" }],
+    ["leading-zero decimal", { amountIn: "00" }],
+    ["overlong decimal", { amountIn: "0".repeat(79) }],
+    ["uint256 overflow", { amountIn: (1n << 256n).toString() }],
+    ["oversized hex", { amountIn: `0x1${"0".repeat(64)}` }],
+    ["uint112 reserve overflow", { reserveX: (1n << 112n).toString() }],
+    ["uint160 anchor overflow", { sqrtPriceX96: (1n << 160n).toString() }],
+    ["fractional fee", { feeAskX24: 1.5 }],
+    ["negative fee", { feeAskX24: -1 }],
+    ["oversized fee", { feeAskX24: MAX_U24 + 1 }],
+    ["NaN fee", { feeAskX24: Number.NaN }],
+    ["infinite fee", { feeAskX24: Number.POSITIVE_INFINITY }],
+  ]) {
+    it(`rejects ${name}`, () => {
+      assert.throws(() => quoteXToY({ ...BASE_PARAMS, ...override }));
+    });
+  }
 
+  it("rejects numeric and noncanonical literals in every vector integer field", () => {
+    const base = readJsonl(vectorFiles[0])[0];
+    for (const field of INTEGER_FIELDS) {
+      assert.throws(
+        () => validateVector({ ...base, [field]: 9_007_199_254_740_993 }, `numeric ${field}`),
+        `${field} numeric literal`,
+      );
+      assert.throws(
+        () => validateVector({ ...base, [field]: "01" }, `noncanonical ${field}`),
+        `${field} noncanonical string`,
+      );
+    }
+    assert.throws(() => validateVector({ ...base, seed: 1 }, "numeric seed"));
+  });
+
+  it("rejects numeric and noncanonical update integer fields", () => {
+    const base = readJsonl(vectorFiles[0]).find((vector) => vector.update !== undefined);
+    assert.ok(base, "deterministic corpus must include an update vector");
+    for (const field of UPDATE_INTEGER_FIELDS) {
+      assert.throws(
+        () => validateVector({ ...base, update: { ...base.update, [field]: 1 } }, `numeric ${field}`),
+        `update.${field} numeric literal`,
+      );
+      assert.throws(
+        () => validateVector({ ...base, update: { ...base.update, [field]: "00" } }, `noncanonical ${field}`),
+        `update.${field} noncanonical string`,
+      );
+    }
+  });
 });
 
 describe("Q64.96 converter helpers", () => {
-  it("keeps camelCase and snake_case X96 helpers exported", () => {
-    assert.equal(priceToSqrtPriceX96(1.0), SQRT_PRICE_X96_ONE);
-    assert.equal(price_to_sqrt_price_x96(1.0), SQRT_PRICE_X96_ONE);
-    assert.equal(sqrtPriceX96ToPrice(SQRT_PRICE_X96_ONE), 1.0);
-    assert.equal(sqrt_price_x96_to_price(SQRT_PRICE_X96_ONE), 1.0);
-  });
-});
-
-describe("fuzz vectors (from Solidity)", () => {
-  if (fuzzVectors.length === 0) {
-    it("(skipped — no fuzz_vectors.jsonl)", () => {});
-    return;
-  }
-
-  it(`validates all ${fuzzVectors.length} fuzz vectors`, () => {
-    const failures = [];
-
-    for (let i = 0; i < fuzzVectors.length; i += 1) {
-      const vector = fuzzVectors[i];
-      const params = paramsFromVector(vector);
-
-      const result = vector.dir === "xToY" ? quoteXToY(params) : quoteYToX(params);
-      const expectedOut = vector.dir === "xToY" ? String(vector.dy) : String(vector.dx);
-
-      if (
-        result.amountOut !== expectedOut
-        || result.sqrtPriceNext !== String(vector.pNext)
-        || result.fee !== String(vector.feeAmt)
-      ) {
-        failures.push(
-          `Line ${i + 1} (${vector.dir}): out=${result.amountOut} expected=${expectedOut}, `
-            + `pNext=${result.sqrtPriceNext} expected=${vector.pNext}, `
-            + `fee=${result.fee} expected=${vector.feeAmt}`,
-        );
-      }
-    }
-
-    if (failures.length > 0) {
-      const sample = failures.slice(0, 10).join("\n");
-      assert.fail(
-        `${failures.length}/${fuzzVectors.length} vectors failed.\n${sample}`
-          + (failures.length > 10 ? `\n... and ${failures.length - 10} more` : ""),
-      );
-    }
+  it("keeps camelCase and snake_case helpers aligned", () => {
+    assert.equal(priceToSqrtPriceX96(1), Q96);
+    assert.equal(price_to_sqrt_price_x96(1), Q96);
+    assert.equal(sqrtPriceX96ToPrice(Q96), 1);
+    assert.equal(sqrt_price_x96_to_price(Q96), 1);
   });
 });

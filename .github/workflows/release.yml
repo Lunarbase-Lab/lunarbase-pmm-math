@@ -1,14 +1,16 @@
 name: Release
 
 # Publishes the pure-Rust crate to crates.io and the N-API binding to npm
-# in a single run, gated on a `v*` tag (e.g. `v0.2.6`).
+# in a single run, gated on a `v*` tag (e.g. `v0.4.0`).
 #
 # Required repo secrets:
 #   - CARGO_REGISTRY_TOKEN  → crates.io API token (https://crates.io/me)
 #   - NPM_TOKEN             → npm Automation token with publish on @lunarbase-lab scope
 #
 # Trigger:
-#   git tag v0.2.6 && git push --tags
+#   git tag v0.4.0
+#   git tag math/go/v0.4.0
+#   git push origin v0.4.0 math/go/v0.4.0
 #
 # The job graph is:
 #   publish-crates  ─────────────────────────────────────────────┐
@@ -20,16 +22,128 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Existing Cargo/npm version to publish (for example 0.4.0)"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 jobs:
+  validate-release:
+    name: Validate release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify Solidity vector provenance
+        run: bash scripts/verify-vectors.sh
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache-dependency-path: math/go/go.sum
+
+      - name: Validate tag, Cargo and npm versions
+        id: version
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            version="${GITHUB_REF_NAME#v}"
+            if [ "v${version}" != "${GITHUB_REF_NAME}" ]; then
+              echo "Tag must have the form vX.Y.Z" >&2
+              exit 1
+            fi
+            go_tag="math/go/v${version}"
+            if ! git rev-parse --verify --quiet "refs/tags/${go_tag}" >/dev/null; then
+              echo "Missing nested Go module tag ${go_tag}" >&2
+              exit 1
+            fi
+            if [ "$(git rev-list -n 1 "${go_tag}")" != "${GITHUB_SHA}" ]; then
+              echo "${go_tag} must point to the release commit ${GITHUB_SHA}" >&2
+              exit 1
+            fi
+          else
+            version="${REQUESTED_VERSION}"
+          fi
+
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Version must have the form X.Y.Z" >&2
+            exit 1
+          fi
+
+          cargo_version="$(cargo metadata --locked --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "lunarbase-pmm-math") | .version')"
+          if [ "${cargo_version}" != "${version}" ]; then
+            echo "Release version ${version} does not match Cargo version ${cargo_version}" >&2
+            exit 1
+          fi
+
+          # shellcheck disable=SC2016
+          RELEASE_VERSION="${version}" node -e '
+            const p = require("./math/rust-node/lunarbase-pmm-math-node/package.json");
+            const expected = process.env.RELEASE_VERSION;
+            if (p.version !== expected) throw new Error(`npm version ${p.version} != tag ${expected}`);
+            for (const [name, value] of Object.entries(p.optionalDependencies ?? {})) {
+              if (value !== expected) throw new Error(`${name} version ${value} != tag ${expected}`);
+            }
+          '
+
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --workspace --all-targets
+
+      - name: Validate tagged Go module
+        working-directory: math/go
+        run: |
+          go vet ./...
+          go test -race -count=1 ./...
+
+      - name: Install N-API build dependencies
+        working-directory: math/rust-node/lunarbase-pmm-math-node
+        run: npm ci --ignore-scripts --omit=optional
+
+      - name: Rebuild and test canonical N-API metadata
+        working-directory: math/rust-node/lunarbase-pmm-math-node
+        run: |
+          npm run build:debug
+          npm test
+          git diff --exit-code -- index.cjs index.d.ts
+
   # ──────────────────────────────────────────────────────────────────
   # crates.io: pure Rust core
   # ──────────────────────────────────────────────────────────────────
   publish-crates:
     name: Publish lunarbase-pmm-math to crates.io
+    needs: [validate-release, test-napi-musl]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,37 +155,55 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: cargo publish (dry-run)
-        run: cargo publish -p lunarbase-pmm-math --dry-run
+        run: cargo publish -p lunarbase-pmm-math --dry-run --locked
+
+      - name: Check whether crate version already exists
+        id: crate
+        env:
+          VERSION: ${{ needs.validate-release.outputs.version }}
+        run: |
+          status="$(curl --silent --show-error \
+            --header 'User-Agent: lunarbase-pmm-math-release (https://github.com/Lunarbase-Lab/lunarbase-pmm-math)' \
+            --output /dev/null --write-out '%{http_code}' \
+            "https://crates.io/api/v1/crates/lunarbase-pmm-math/${VERSION}")"
+          case "${status}" in
+            200) echo "exists=true" >> "${GITHUB_OUTPUT}" ;;
+            404) echo "exists=false" >> "${GITHUB_OUTPUT}" ;;
+            *) echo "Unexpected crates.io response: HTTP ${status}" >&2; exit 1 ;;
+          esac
 
       - name: cargo publish
-        # `continue-on-error: true` lets re-runs of the same tag pass: the
-        # second `cargo publish` will fail with "version already published"
-        # but that's expected and we don't want it to block the npm pipeline
-        # (which has its own `needs: build-napi` chain).
-        continue-on-error: true
-        run: cargo publish -p lunarbase-pmm-math --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        if: steps.crate.outputs.exists != 'true'
+        run: cargo publish -p lunarbase-pmm-math --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   # ──────────────────────────────────────────────────────────────────
   # NAPI: build per-platform binaries
   # ──────────────────────────────────────────────────────────────────
   build-napi:
     name: Build NAPI (${{ matrix.target }})
+    needs: validate-release
     strategy:
       fail-fast: true
       matrix:
         include:
-          - host: macos-14            # macOS-arm64 native runner
+          - host: macos-15            # macOS-arm64 native runner
             target: aarch64-apple-darwin
             zig: false
+            glibc: ""
           - host: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            zig: false
+            zig: true
+            glibc: "2.17"
           - host: ubuntu-latest       # cross-compile via zig (GitHub doesn't have arm64 Linux runners on free tier)
             target: aarch64-unknown-linux-gnu
             zig: true
+            glibc: ""
           - host: ubuntu-latest       # mpamm.wtf runs on node:24-alpine (musl)
             target: x86_64-unknown-linux-musl
             zig: true
+            glibc: ""
     runs-on: ${{ matrix.host }}
     defaults:
       run:
@@ -109,18 +241,40 @@ jobs:
           tool: cargo-zigbuild
 
       - name: Build .node binary
-        # napi-rs CLI auto-detects cargo-zigbuild and uses it when --zig is
-        # passed. For native targets (zig=false) we just call cargo directly.
+        # Direct cargo-zigbuild lets GNU targets pin a glibc floor and avoids
+        # @napi-rs/cli v2's incompatible AArch64 linker flag. The generated
+        # loader and declarations are tracked and independently checked.
         run: |
-          if [ "${{ matrix.zig }}" = "true" ]; then
-            CARGO_TARGET_DIR="${{ github.workspace }}/target" npx napi build --platform --release --target ${{ matrix.target }} --zig
+          if [ -n "${{ matrix.glibc }}" ]; then
+            CARGO_TARGET_DIR="${{ github.workspace }}/target" cargo zigbuild -p lunarbase-pmm-math-node --release --target "${{ matrix.target }}.${{ matrix.glibc }}"
+            cp "${{ github.workspace }}/target/${{ matrix.target }}/release/liblunarbase_pmm_math_node.so" lunarbase-pmm-math.linux-x64-gnu.node
+          elif [ "${{ matrix.target }}" = "aarch64-unknown-linux-gnu" ]; then
+            CARGO_TARGET_DIR="${{ github.workspace }}/target" cargo zigbuild -p lunarbase-pmm-math-node --release --target ${{ matrix.target }}
+            cp "${{ github.workspace }}/target/${{ matrix.target }}/release/liblunarbase_pmm_math_node.so" lunarbase-pmm-math.linux-arm64-gnu.node
+          elif [ "${{ matrix.zig }}" = "true" ]; then
+            CARGO_TARGET_DIR="${{ github.workspace }}/target" npx napi build --platform --release --target ${{ matrix.target }} --zig --js index.cjs --no-const-enum
           else
-            CARGO_TARGET_DIR="${{ github.workspace }}/target" npx napi build --platform --release --target ${{ matrix.target }}
+            CARGO_TARGET_DIR="${{ github.workspace }}/target" npx napi build --platform --release --target ${{ matrix.target }} --js index.cjs --no-const-enum
           fi
         shell: bash
 
-      - name: Rename auto-generated index.js → index.cjs
-        run: mv -f index.js index.cjs
+      - name: Enforce promised glibc floor
+        if: matrix.glibc != ''
+        run: |
+          max_glibc="$(readelf --version-info lunarbase-pmm-math.linux-x64-gnu.node | grep -o 'GLIBC_[0-9.]*' | sort -Vu | tail -n 1)"
+          if [ -z "${max_glibc}" ]; then
+            echo "No GLIBC symbol versions found in GNU addon" >&2
+            exit 1
+          fi
+          if [ "$(printf '%s\n' "GLIBC_${{ matrix.glibc }}" "${max_glibc}" | sort -V | tail -n 1)" != "GLIBC_${{ matrix.glibc }}" ]; then
+            echo "Addon requires ${max_glibc}, above promised GLIBC_${{ matrix.glibc }}" >&2
+            exit 1
+          fi
+
+      - name: Verify generated JS metadata
+        run: |
+          npm run verify:metadata
+          git diff --exit-code -- index.cjs index.d.ts
 
       - name: Upload .node + js metadata
         # `napi artifacts` looks for files at `artifacts/bindings-<triple>/`;
@@ -151,27 +305,50 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install N-API packaging dependencies
+        run: npm ci --ignore-scripts --omit=optional
+
       - name: Download musl artifact
         uses: actions/download-artifact@v4
         with:
           name: bindings-x86_64-unknown-linux-musl
           path: math/rust-node/lunarbase-pmm-math-node/artifacts/musl
 
-      - name: Restore generated loader and native addon
+      - name: Assemble the main and musl optional packages
         run: |
           cp artifacts/musl/index.cjs index.cjs
           cp artifacts/musl/index.d.ts index.d.ts
-          cp artifacts/musl/lunarbase-pmm-math.linux-x64-musl.node .
+          npm run verify:metadata
+          npx napi create-npm-dir -t .
+          npm run prepare:platform-packages
+          mv artifacts/musl/lunarbase-pmm-math.linux-x64-musl.node npm/linux-x64-musl/
+          mkdir -p release-smoke/packages
+          npm pack --ignore-scripts --pack-destination release-smoke/packages
+          npm pack --ignore-scripts --pack-destination release-smoke/packages ./npm/linux-x64-musl
 
-      - name: Run deterministic and fuzz-vector Node tests
-        run: docker run --rm --platform linux/amd64 -v "${{ github.workspace }}:/repo" -w /repo/math/rust-node/lunarbase-pmm-math-node node:24-alpine node --test test/quote.test.mjs
+      - name: Install tarballs and replay vectors through the public package name
+        run: |
+          docker run --rm --platform linux/amd64 -v "${{ github.workspace }}:/repo" node:24-alpine sh -euxc '
+            mkdir -p /tmp/pmm-test
+            cd /tmp/pmm-test
+            npm init -y >/dev/null
+            npm install --ignore-scripts /repo/math/rust-node/lunarbase-pmm-math-node/release-smoke/packages/*.tgz
+            cp /repo/math/rust-node/lunarbase-pmm-math-node/test/quote.test.mjs .
+            PMM_MATH_BINDING=@lunarbase-lab/pmm-math \
+              PMM_MATH_VECTORS_DIR=/repo/math/rust/lunarbase-pmm-math \
+              node --test quote.test.mjs
+          '
 
   # ──────────────────────────────────────────────────────────────────
   # npm: publish main package + per-platform sub-packages
   # ──────────────────────────────────────────────────────────────────
   publish-npm:
     name: Publish @lunarbase-lab/pmm-math to npm
-    needs: [build-napi, test-napi-musl]
+    needs: [validate-release, publish-crates, build-napi, test-napi-musl]
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -217,13 +394,21 @@ jobs:
           cp artifacts/bindings-x86_64-unknown-linux-gnu/index.cjs index.cjs
           cp artifacts/bindings-x86_64-unknown-linux-gnu/index.d.ts index.d.ts
 
+      - name: Type-check the exact metadata selected for publication
+        run: |
+          npm run verify:metadata
+          npm run test:types
+          git diff --exit-code -- index.cjs index.d.ts
+
       - name: Generate per-triple npm/<abi>/ skeleton (package.json + README)
         # `napi prepublish` reads npm/<abi>/package.json to know what to ship
         # per platform; it does NOT create those files itself.
         # `napi create-npm-dir` (singular!) reads `napi.triples.additional`
         # from the main package.json and generates one subdir per triple.
         # `-t .` means "output base dir = cwd" → produces ./npm/<abi>/.
-        run: npx napi create-npm-dir -t .
+        run: |
+          npx napi create-npm-dir -t .
+          npm run prepare:platform-packages
 
       - name: Move .node files into npm/<short-abi>/
         # We do this manually instead of `napx napi artifacts` because the
@@ -242,7 +427,19 @@ jobs:
           echo "=== npm/ tree ==="
           ls -laR npm/ || true
 
+      - name: Check whether npm version already exists
+        id: npm
+        env:
+          VERSION: ${{ needs.validate-release.outputs.version }}
+        run: |
+          if npm view "@lunarbase-lab/pmm-math@${VERSION}" version >/dev/null 2>&1; then
+            echo "exists=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "exists=false" >> "${GITHUB_OUTPUT}"
+          fi
+
       - name: Publish to npm
+        if: steps.npm.outputs.exists != 'true'
         # `npm publish` triggers `prepublishOnly` (= `napi prepublish -t npm
         # --skip-gh-release`), which generates per-triple package.json files,
         # publishes each sub-package via `npm publish` from its dir, and

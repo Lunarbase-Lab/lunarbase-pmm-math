@@ -5,16 +5,15 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Pure Rust port of the LunarBase Curve PMM quoting math, bit-exact with the on-chain reference."
+description = "Pure Rust mirror of LunarBase linear anchor quotes and directional punishment transitions."
 readme = "README.md"
 keywords = ["lunarbase", "pmm", "amm", "defi", "math"]
 categories = ["mathematics", "no-std::no-alloc"]
-# Heavy test fixtures live in the repo root and are pulled into `src/{tests,
-# fuzz_tests}.rs` via `include_str!` only under `#[cfg(test)]`. Excluding them
-# keeps the published crate small without breaking `cargo build` for users.
+# Solidity-oracle parity fixtures are test-only and excluded from published crates.
 exclude = [
     "deterministic_vectors.jsonl",
     "fuzz_vectors.jsonl",
+    "tests/solidity_vectors.rs",
     "benches/",
     ".bench-baseline.txt",
 ]
@@ -27,6 +26,8 @@ ruint = { workspace = true }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
+serde = { workspace = true }
+serde_json = "1"
 
 [[bench]]
 name = "quote"

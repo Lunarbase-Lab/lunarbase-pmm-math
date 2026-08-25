@@ -1,16 +1,16 @@
 # Offchain quoting examples
 
 End-to-end Rust reference for partners who want to quote against a LunarBase
-Pool **off-chain** with sub-block latency. The example connects to a Base
-[flashblocks](https://docs.base.org/) node, mirrors the on-chain pool state
-in Redis, and computes quotes through
+Pool **off-chain** from internally consistent confirmed-head snapshots. The
+example uses WebSocket heads to trigger hash-pinned HTTP reads, publishes one
+atomic caller-specific snapshot in Redis, and computes quotes through
 [`lunarbase-pmm-math`](../../math/rust/lunarbase-pmm-math) — bit-for-bit
 identical with the current on-chain math for the effective fee multiplier and
-the crate's supported `u128` Q96 anchor range.
+the full Solidity `uint160` Q96 anchor range.
 
-> Only depends on **public** contract views, events, and the public
-> `lunarbase-pmm-math` crate. Partners consume `StateUpdated` events; they do
-> not reproduce the operator's anchor-price computation.
+> Only depends on **public** contract views, `newHeads`, and the public
+> `lunarbase-pmm-math` crate. It does not reproduce the operator's anchor-price
+> computation and never applies pending logs to quote state.
 
 ## Layout
 
@@ -22,25 +22,28 @@ The current example is the integration target.
 
 ## What it does
 
-1. **Seed** initial pool state from an HTTP RPC. This is the only required
-   synchronous chain read before the service can quote from cache.
-2. **Subscribe** over WebSocket to `newHeads`, `newFlashblocks`, and
-   `pendingLogs` filtered by the pool address.
-3. **Apply authoritative state events** (`Sync`, `StateUpdated`,
-   `ConcentrationKSet`, `BlockDelaySet`, `Paused`/`Unpaused`,
-   `WhitelistSet`, `BlacklistFeeMultiplierSet`) to the cache. Current pools
-   emit `Sync` before `SwapExecuted`, so the latter is observed for fills only
-   and is never applied to reserves a second time.
-4. **Deduplicate** logs re-emitted across pre-confirmation snapshots by
-   `(blockNumber, transactionHash, logIndex)`.
-5. **Quote from Redis only** through `quote_exact_in`. The quoter reads
-   anchor price, directional fees, reserves, concentration, freshness config,
-   paused state, and the effective fee multiplier for the configured execution
-   caller. A quote's hypothetical `pNext` is returned but not cached as current
-   Pool state.
+1. **Mark Redis unhealthy**, then open the WebSocket and subscribe to
+   `newHeads`. No initial RPC snapshot is allowed before that subscription is
+   acknowledged. Acknowledgement alone does not trigger HTTP reads: the quoter
+   waits for the first valid head containing both `number` and `hash`.
+2. For every confirmed `newHeads` notification, **mark the cache unhealthy
+   before RPC work**, resolve the observed hash over HTTP, require its block
+   number to match the WS notification, and pin every contract view to that
+   hash using EIP-1898 with `requireCanonical=true`.
+3. **Publish atomically**: the complete pool/caller JSON snapshot and a
+   short-lived synchronized lease become visible in one Redis transaction.
+   Any timeout, RPC error, disconnect, or malformed snapshot leaves quotes
+   disabled. Redis connection epochs plus a generation token prevent queued or
+   in-flight heads from an old WebSocket connection from republishing health
+   after a disconnect.
+4. **Quote from Redis only** through `quote_exact_in`. The quoter refuses an
+   unhealthy/missing snapshot, validates Solidity numeric widths, checks
+   pause/freshness, and uses checked math. The result includes the immediate
+   `effectiveFeeX24`; `pNext` equals the cached operator anchor.
 
-End-to-end latency from `pendingLogs` → Redis write is single-digit
-milliseconds in the example deployment.
+The canonical example does not subscribe to `newFlashblocks` or `pendingLogs`.
+It intentionally gives up sub-block state and pending-log latency so it cannot
+construct hybrid or rollback-prone snapshots.
 
 ## Data needed for a fully off-chain quote
 
@@ -49,14 +52,20 @@ warm in cache:
 
 | Value | Source | Why it is needed |
 | ----- | ------ | ---------------- |
-| `anchorPrice` / `sqrt_price_x96` | `state()` + `StateUpdated` | PMM anchor in Q64.96 |
-| `feeAskX24`, `feeBidX24` | `state()` + `StateUpdated` | Directional base fees |
-| `reserveX`, `reserveY` | `getXReserve`, `getYReserve` + `Sync` | Current cached reserves |
-| `concentrationK` | `concentrationK()` + `ConcentrationKSet` | Curve concentration in Q20.12 |
-| `blockDelay`, `latestUpdateBlock`, `head` | `blockDelay()`, `state()`, `newHeads` | Fail-closed freshness check |
-| `paused` | `paused()` + `Paused`/`Unpaused` | Do not quote executable swaps while paused |
-| `isWhitelisted(QUOTE_CALLER_ADDRESS)` | seed + `WhitelistSet` | Decides whether multiplier is `1` |
-| `blacklistFeeMultiplier` | seed + `BlacklistFeeMultiplierSet` | Multiplier for non-whitelisted callers |
+| `anchorPrice`, `feeAskX24`, `feeBidX24`, `latestUpdateBlock` | block-pinned `state()` | Anchor, current directional fees, and freshness origin |
+| `reserveX`, `reserveY` | block-pinned `getXReserve()` / `getYReserve()` | Active reserves from the same block as every other field |
+| `maxPunishmentX24` | block-pinned `maxPunishmentX24()` | Maximum immediate directional fee increment |
+| `blockDelay` | block-pinned `blockDelay()` | Fail-closed operator-update freshness check |
+| `paused` | block-pinned `paused()` | Do not quote executable swaps while paused |
+| `isWhitelisted(QUOTE_CALLER_ADDRESS)` | block-pinned `isWhitelisted()` | Decides whether multiplier is `1` |
+| `blacklistFeeMultiplier` | block-pinned `blacklistFeeMultiplier()` | Multiplier for non-whitelisted callers |
+| `snapshotBlock` | confirmed `newHeads.number`, verified by HTTP `eth_getBlockByHash` | Numeric identity and freshness height of the snapshot |
+| `snapshotBlockHash` | confirmed `newHeads.hash`, verified by HTTP `eth_getBlockByHash` | EIP-1898 block hash passed to every view above with `requireCanonical=true` |
+
+The HTTP endpoint must support the EIP-1898 block selector object
+`{"blockHash": "0x…", "requireCanonical": true}` for `eth_call`. If it does
+not, or if the observed hash is missing, non-canonical, unavailable, or resolves
+to a different number, refresh fails closed and Redis remains unhealthy.
 
 `QUOTE_CALLER_ADDRESS` must be the exact address the Pool sees as
 `msg.sender`: router, execution adapter, proxy, or settlement contract. It is
@@ -123,8 +132,9 @@ cargo run --release -p offchain-quoting-example-rust
 
 Configurable via env: `POOL_ADDRESS`, `RPC_URL`, `FLASH_WS`, `REDIS_URL`,
 `QUOTE_CALLER_ADDRESS`, `QUOTE_AMOUNT_IN`, `QUOTE_DIRECTION`,
-`QUOTE_INTERVAL_SECS`, `SEED_TIMEOUT_SECS`, `REDIS_CONNECT_TIMEOUT_SECS`,
-`RUST_LOG`.
+`QUOTE_INTERVAL_SECS`, `SNAPSHOT_TIMEOUT_SECS`,
+`REDIS_CONNECT_TIMEOUT_SECS`, `RUST_LOG`. `SEED_TIMEOUT_SECS` remains a legacy
+fallback for `SNAPSHOT_TIMEOUT_SECS`.
 
 You can also run without a `.env` file:
 
@@ -141,17 +151,13 @@ cargo run --release -p offchain-quoting-example-rust
 
 ## Redis layout
 
-| Key                           | Type   | TTL  | Content                                   |
-| ----------------------------- | ------ | ---- | ----------------------------------------- |
-| `reserves:<pool>`             | JSON   | —    | `["<reserveX>", "<reserveY>"]`            |
-| `updates:<pool>`              | JSON   | —    | `{block, anchorPrice, feeAskX24, feeBidX24}` |
-| `pmm:concentrationK:<pool>`   | string | —    | decimal `uint32`                          |
-| `pmm:blockDelay:<pool>`       | string | —    | decimal `uint48`                          |
-| `pmm:paused:<pool>`           | string | —    | `0` / `1`                                 |
-| `pmm:callerWhitelisted:<pool>:<caller>` | string | — | `0` / `1` for the configured caller |
-| `pmm:blacklistFeeMultiplier:<pool>` | string | — | decimal `uint256`                         |
-| `head:<pool>`                 | string | 30 s | confirmed `blockNumber`                   |
-| `log:tx:<pool>:<fingerprint>` | string | 10 s | dedup token (`SET NX EX 10`)              |
+| Key | Type | TTL | Content |
+| --- | --- | --- | --- |
+| `pmm:canonicalSnapshot:<pool>:<caller>` | JSON | — | Complete block-pinned pool and caller policy snapshot |
+| `pmm:synchronized:<pool>:<caller>` | string | 30 s | `1` only after atomic publication; `0` during refresh/disconnect |
+| `pmm:snapshotGeneration:<pool>:<caller>` | integer | — | Monotonic invalidation token guarding snapshot publication |
+| `pmm:connectionEpochCounter:<pool>:<caller>` | integer | — | Monotonic WS connection epoch allocator |
+| `pmm:activeConnectionEpoch:<pool>:<caller>` | integer | — | Epoch allowed to start and atomically publish snapshots |
 
 Inspect:
 
@@ -165,14 +171,20 @@ docker exec lunarbase-redis redis-cli KEYS '*'
 The example is **read-only**: no transaction signing, no swap calldata
 construction, no anchor-price computation, no CEX integration.
 
-Required quote state is persistent so a quiet pool remains quoteable between
-swaps. The expiring `head` key is a separate liveness guard: if head updates
-stop, the quoter fails closed instead of presenting old state as fresh.
+The snapshot payload is persistent, but it is unusable without the expiring
+synchronized lease. If heads stop, the WebSocket disconnects, or a refresh
+fails, the quoter fails closed instead of presenting old state as fresh.
+Every payload records both `snapshotBlock` and `snapshotBlockHash`.
 
-The example uses separate Redis connections for event ingestion and quote
+Pending logs and individual contract events never mutate Redis. This loses
+sub-block visibility by design: after an unconfirmed swap or operator update,
+the example continues to serve only its last healthy confirmed snapshot until
+the next confirmed-head refresh completes.
+
+The example uses separate Redis connections for snapshot publication and quote
 reads. Keep that separation in production so slow client requests cannot block
-chain-event processing. For multiple execution callers, run one quoter cache
-namespace per caller or include caller in the fee-policy keys as shown here.
+head processing. Run exactly one snapshot writer per pool/caller namespace.
+For multiple execution callers, use one caller-scoped namespace each.
 
 See [`math/rust/lunarbase-pmm-math`](../../math/rust/lunarbase-pmm-math) for
 the quoter API.

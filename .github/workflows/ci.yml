@@ -15,8 +15,31 @@ env:
   # `cargo clippy -- -D warnings` instead.
 
 jobs:
+  vectors:
+    name: Verify Solidity vector provenance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify manifest, corpus hashes, row counts, and fixture copies
+        run: bash scripts/verify-vectors.sh
+
+  msrv:
+    name: Rust MSRV 1.90
+    needs: vectors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install declared minimum Rust toolchain
+        uses: dtolnay/rust-toolchain@1.90
+
+      - name: Check workspace at MSRV
+        run: cargo check --workspace --all-targets --locked
+
   rust:
     name: Rust (${{ matrix.os }})
+    needs: vectors
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -44,6 +67,7 @@ jobs:
 
   go:
     name: Go (${{ matrix.os }})
+    needs: vectors
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -58,7 +82,11 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          # Go 1.22 binaries abort on current macos-latest runners with a
+          # missing LC_UUID load command. The module keeps go 1.22 as its
+          # minimum language version while CI runs on the supported stable
+          # toolchain.
+          go-version: stable
           cache-dependency-path: math/go/go.sum
 
       - name: gofmt
@@ -88,10 +116,47 @@ jobs:
         if: runner.os == 'macOS'
         run: go test -count=1 ./...
 
+  node:
+    name: Node runtime (${{ matrix.os }})
+    needs: vectors
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: math/rust-node/lunarbase-pmm-math-node
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: math/rust-node/lunarbase-pmm-math-node/package-lock.json
+
+      - name: Install binding toolchain
+        run: npm ci --ignore-scripts --omit=optional
+
+      - name: Build host addon and generated declarations
+        run: npm run build:debug
+
+      - name: Ensure generated loader and declarations are committed
+        run: git diff --exit-code -- index.cjs index.d.ts
+
+      - name: Replay Solidity deterministic and fuzz vectors
+        run: npm test
+
   cross-build:
     name: Cross-compile sanity
     runs-on: ubuntu-latest
-    needs: [rust, go]
+    needs: [msrv, rust, go, node]
     strategy:
       fail-fast: false
       matrix:
@@ -138,8 +203,9 @@ jobs:
         working-directory: math/rust-node/lunarbase-pmm-math-node
         run: |
           npm ci --ignore-scripts --omit=optional
-          CARGO_TARGET_DIR="${{ github.workspace }}/target" npx napi build --platform --release --target x86_64-unknown-linux-musl --zig
-          mv -f index.js index.cjs
+          CARGO_TARGET_DIR="${{ github.workspace }}/target" npx napi build --platform --release --target x86_64-unknown-linux-musl --zig --js index.cjs --no-const-enum
+          npm run verify:metadata
+          git diff --exit-code -- index.cjs index.d.ts
 
       - name: Upload musl runtime artifact
         if: matrix.target == 'x86_64-unknown-linux-musl'
@@ -187,7 +253,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: stable
           cache-dependency-path: |
             math/go/go.sum
             examples/minimal/go/go.sum

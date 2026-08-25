@@ -5,10 +5,11 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const binding = require("./index.cjs");
 
+export const SwapSimulationStatus = binding.SwapSimulationStatus;
 export const quoteXToY = binding.quoteXToY;
 export const quoteYToX = binding.quoteYToX;
-export const plainToQ12ConcentrationK = binding.plainToQ12ConcentrationK;
-export const q12ToPlainConcentrationK = binding.q12ToPlainConcentrationK;
+export const simulateXToY = binding.simulateXToY;
+export const simulateYToX = binding.simulateYToX;
 export const priceToSqrtPriceX96 = binding.priceToSqrtPriceX96;
 export const sqrtPriceX96ToPrice = binding.sqrtPriceX96ToPrice;
 export const price_to_sqrt_price_x96 = binding.price_to_sqrt_price_x96;

@@ -1,9 +1,8 @@
 # @lunarbase-lab/pmm-math
 
-N-API binding exposing [`lunarbase-pmm-math`](https://crates.io/crates/lunarbase-pmm-math)
-to Node.js. Bit-exact mirror of the on-chain LunarBase Curve PMM quoting math
-(**Q64.96** `uint160` sqrt-price design), verified against deterministic and fuzz
-vectors generated from the on-chain Solidity contract.
+Native Node.js binding for the current LunarBase linear quote and immediate
+directional-punishment math. Its outputs are replayed against deterministic
+and seeded-fuzz JSONL vectors produced by Solidity.
 
 ## Install
 
@@ -11,63 +10,93 @@ vectors generated from the on-chain Solidity contract.
 npm install @lunarbase-lab/pmm-math
 ```
 
-The matching `.node` binary is pulled via `optionalDependencies`. Supported
-platforms:
-
-| Sub-package                                | OS / Arch          |
-| ------------------------------------------ | ------------------ |
-| `@lunarbase-lab/pmm-math-darwin-arm64`     | macOS arm64        |
-| `@lunarbase-lab/pmm-math-linux-x64-gnu`    | Linux x64 (glibc)  |
-| `@lunarbase-lab/pmm-math-linux-arm64-gnu`  | Linux arm64 (glibc)|
-| `@lunarbase-lab/pmm-math-linux-x64-musl`   | Linux x64 (musl / Alpine) |
-
-Open an issue if you need Linux arm64 musl, darwin-x64, or win32-x64.
+Supported native packages are macOS arm64, Linux x64 glibc (GLIBC 2.17+),
+Linux arm64 glibc, and Linux x64 musl/Alpine. The x64 GNU release artifact is
+cross-linked against the declared 2.17 floor and its imported symbol versions
+are checked before publication.
 
 ## Usage
 
 ```ts
 import {
-  quoteXToY,
-  plainToQ12ConcentrationK,
   priceToSqrtPriceX96,
+  quoteXToY,
+  simulateXToY,
+  SwapSimulationStatus,
   type QuoteParams,
 } from "@lunarbase-lab/pmm-math";
 
 const params: QuoteParams = {
-  // Q64.96 sqrt-price (uint160). 2^96 = price 1.0; use priceToSqrtPriceX96
-  // for arbitrary decimal prices.
-  sqrtPriceX96: priceToSqrtPriceX96(1.0),
-  feeAskX24: 0,           // Q24, charged on Y→X
-  feeBidX24: 838860,      // Q24, ≈ 5% charged on X→Y
+  sqrtPriceX96: priceToSqrtPriceX96(1),
+  feeAskX24: 0,
+  feeBidX24: 50_331,
   reserveX: "1000000000000000000000",
   reserveY: "1000000000000000000000",
-  // Effective K = concentrationK / 2^12.
-  concentrationK: plainToQ12ConcentrationK(5000),
+  maxPunishmentX24: 1_677_721, // about 10% maximum increment
   amountIn: "1000000000000000000",
+  feeMultiplier: "1",
 };
 
-const r = quoteXToY(params);
-console.log(r.amountOut, r.sqrtPriceNext, r.fee);
+const quote = quoteXToY(params);
+console.log(quote.amountOut, quote.sqrtPriceNext, quote.fee, quote.effectiveFeeX24);
+
+const simulation = simulateXToY(params);
+console.log({
+  executable: simulation.executable,
+  status: simulation.status,
+  standardTokenTransitionApplied:
+    simulation.status === SwapSimulationStatus.Applied,
+  desiredPunishmentX24: simulation.desiredPunishmentX24,
+  appliedPunishmentX24: simulation.appliedPunishmentX24,
+  feeBidX24After: simulation.feeBidX24After,
+  reserveXAfter: simulation.reserveXAfter,
+  reserveYAfter: simulation.reserveYAfter,
+});
 ```
 
-All big-integer fields cross the JS ↔ native boundary as **strings** (decimal
-or `0x`-hex). Output amounts are decimal strings.
+`quoteXToY` uses the bid side; `quoteYToX` uses the ask side. Each triggering
+quote computes its punishment from the pre-swap reserves, saturating-adds it to
+the stored directional fee, and immediately prices output with that
+`effectiveFeeX24`. Successful settlement persists the same fee; any rollback
+leaves stored state unchanged.
+`sqrtPriceNext` is retained for ABI compatibility and always equals
+`sqrtPriceX96`.
 
-### API surface
+`simulateXToY` and `simulateYToX` are counterfactual pure-math models of the
+quote, punishment, and reserve transition for standard tokens. An `Applied`
+status means that this local transition fits the Solidity numeric domains; it
+does **not** guarantee that a transaction will succeed. Fee-on-transfer or
+rebasing behavior, token callbacks, and later transfer/accounting reverts are
+not modeled. `LaterRevert` mirrors the lower-level Rust rollback vocabulary but
+is not produced automatically by these JavaScript functions.
 
-| Function                                                          | Purpose                                                |
-| ----------------------------------------------------------------- | ------------------------------------------------------ |
-| `quoteXToY(params)` / `quoteYToX(params)`                         | Bit-exact mirrors of Solidity `SwapLib`.               |
-| `priceToSqrtPriceX96(price)` / `sqrtPriceX96ToPrice(p)`           | `number` price ↔ Q64.96 sqrt-price.                    |
-| `price_to_sqrt_price_x96(price)` / `sqrt_price_x96_to_price(p)`   | Compatibility aliases for the X96 converter helpers.   |
-| `plainToQ12ConcentrationK(k)` / `q12ToPlainConcentrationK(kQ12)`  | Plain `K` ↔ Q20.12 `concentrationK`.                   |
+`quoteXToY` and `quoteYToX` are stateless. Reusing unchanged params for every
+chunk does not model a sequential split; pass the `fee*X24After` and
+`reserve*After` values from each applied simulation into the next call. This is
+economically material because splitting can increase aggregate output under
+the current mechanism.
 
-## Pure-Rust crate
+### API
 
-The same math is also published as
-[`lunarbase-pmm-math`](https://crates.io/crates/lunarbase-pmm-math) on
-crates.io.
+| Function | Purpose |
+| --- | --- |
+| `quoteXToY(params)`, `quoteYToX(params)` | Triggering quote with immediate effective fee |
+| `simulateXToY(params)`, `simulateYToX(params)` | Standard-token counterfactual quote, punishment, and reserve transition |
+| `priceToSqrtPriceX96(price)`, `sqrtPriceX96ToPrice(p)` | Decimal price and Q64.96 anchor helpers |
+| snake_case price helpers | Compatibility aliases |
+
+All `uint112`, `uint160`, and `uint256` fields cross the JS/native boundary as
+strict strings. Decimal input must be exactly `"0"` or an unsigned digit string
+without leading zeros, is limited to 78 digits, and may not exceed
+`uint256::MAX`. Hex input requires a `0x` prefix and is limited to 64 hex
+digits. Q24 fields are numbers but must be finite integers in `[0, 0xffffff]`;
+fractional, wrapped, NaN, and infinite inputs are rejected before quoting.
+
+## Pure Rust
+
+The same implementation is published as
+[`lunarbase-pmm-math`](https://crates.io/crates/lunarbase-pmm-math).
 
 ## License
 
-Dual-licensed under MIT or Apache-2.0.
+MIT OR Apache-2.0.

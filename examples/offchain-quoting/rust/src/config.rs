@@ -12,7 +12,7 @@ const DEFAULT_REDIS_URL: &str = "redis://127.0.0.1:6379";
 const DEFAULT_QUOTE_AMOUNT_IN: &str = "1000000000000000";
 const DEFAULT_QUOTE_DIRECTION: &str = "x_to_y";
 const DEFAULT_QUOTE_INTERVAL_SECS: u64 = 5;
-const DEFAULT_SEED_TIMEOUT_SECS: u64 = 20;
+const DEFAULT_SNAPSHOT_TIMEOUT_SECS: u64 = 20;
 const DEFAULT_REDIS_CONNECT_TIMEOUT_SECS: u64 = 5;
 
 pub struct Config {
@@ -24,7 +24,7 @@ pub struct Config {
     pub demo_quote_amount_in: U256,
     pub demo_quote_x_to_y: bool,
     pub demo_quote_interval: Duration,
-    pub seed_timeout: Duration,
+    pub snapshot_timeout: Duration,
     pub redis_connect_timeout: Duration,
 }
 
@@ -60,12 +60,13 @@ impl Config {
                 .transpose()?
                 .unwrap_or(DEFAULT_QUOTE_INTERVAL_SECS),
         );
-        let seed_timeout = Duration::from_secs(
-            env::var("SEED_TIMEOUT_SECS")
+        let snapshot_timeout = Duration::from_secs(
+            env::var("SNAPSHOT_TIMEOUT_SECS")
+                .or_else(|_| env::var("SEED_TIMEOUT_SECS"))
                 .ok()
-                .map(|s| s.parse().context("SEED_TIMEOUT_SECS must be a u64"))
+                .map(|s| s.parse().context("SNAPSHOT_TIMEOUT_SECS must be a u64"))
                 .transpose()?
-                .unwrap_or(DEFAULT_SEED_TIMEOUT_SECS),
+                .unwrap_or(DEFAULT_SNAPSHOT_TIMEOUT_SECS),
         );
         let redis_connect_timeout = Duration::from_secs(
             env::var("REDIS_CONNECT_TIMEOUT_SECS")
@@ -87,7 +88,7 @@ impl Config {
             demo_quote_amount_in,
             demo_quote_x_to_y,
             demo_quote_interval,
-            seed_timeout,
+            snapshot_timeout,
             redis_connect_timeout,
         })
     }
