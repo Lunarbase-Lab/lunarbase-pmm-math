@@ -14,7 +14,6 @@ coverage.txt
 # Node / napi-rs build artifacts
 node_modules/
 *.node
-math/rust-node/lunarbase-pmm-math-node/index.cjs
 math/rust-node/lunarbase-pmm-math-node/index.js
 
 # IDE

@@ -1,12 +1,12 @@
 #![allow(missing_docs, unreachable_pub)]
 
 mod abi;
-mod cache;
+mod canonical_cache;
 mod config;
-mod handlers;
 mod pool_state;
 mod quoter;
 mod seed;
+mod snapshot_handler;
 mod ws;
 
 use alloy::primitives::Address;
@@ -21,7 +21,7 @@ use tracing_subscriber::{
     EnvFilter,
 };
 
-use crate::cache::Cache;
+use crate::canonical_cache::Cache;
 use crate::config::Config;
 
 const EVENT_CHANNEL_CAPACITY: usize = 1024;
@@ -35,9 +35,9 @@ async fn main() -> Result<()> {
     info!(
         pool = %cfg.pool,
         quote_caller = %cfg.quote_caller,
-        rpc = %cfg.rpc_url,
-        ws = %cfg.ws_url,
-        redis = %redact_redis(&cfg.redis_url),
+        rpc = %redact_endpoint(&cfg.rpc_url),
+        ws = %redact_endpoint(&cfg.ws_url),
+        redis = %redact_endpoint(&cfg.redis_url),
         "starting offchain quoter"
     );
     if cfg.quote_caller == Address::ZERO {
@@ -47,7 +47,7 @@ async fn main() -> Result<()> {
     }
     if cfg.ws_url.contains("replace-with") {
         warn!(
-            "FLASH_WS is still a placeholder; seed may work, but live event logs require a real WebSocket endpoint"
+            "FLASH_WS is still a placeholder; quotes remain disabled until the confirmed-head subscription connects"
         );
     }
 
@@ -63,18 +63,11 @@ async fn main() -> Result<()> {
     )
     .await?;
     info!("Redis cache connected");
-
-    info!(
-        timeout_secs = cfg.seed_timeout.as_secs(),
-        "seeding cache from RPC"
-    );
-    tokio::time::timeout(
-        cfg.seed_timeout,
-        seed::seed_state(&cfg.rpc_url, cfg.pool, cfg.quote_caller, &mut event_cache),
-    )
-    .await
-    .context("timed out while seeding pool state from RPC")??;
-    info!("seed complete; starting live subscriptions and offline quote loop");
+    let _ = event_cache
+        .mark_unsynchronized()
+        .await
+        .map_err(|_| eyre::eyre!("failed to mark quote cache unhealthy"))?;
+    info!("cache marked unhealthy until subscriptions are acknowledged and a pinned snapshot succeeds");
 
     let quote_cache = connect_cache(
         &cfg.redis_url,
@@ -83,9 +76,24 @@ async fn main() -> Result<()> {
         cfg.redis_connect_timeout,
     )
     .await?;
+    let disconnect_cache = connect_cache(
+        &cfg.redis_url,
+        cfg.pool,
+        cfg.quote_caller,
+        cfg.redis_connect_timeout,
+    )
+    .await?;
 
-    let (tx, mut rx) = mpsc::channel::<ws::ChainEvent>(EVENT_CHANNEL_CAPACITY);
-    let ws_handle = tokio::spawn(ws::run(cfg.ws_url.clone(), cfg.pool, tx.clone()));
+    let active_epoch = ws::ActiveConnectionEpoch::default();
+    let (tx, mut rx) = mpsc::channel::<ws::ConnectionEvent>(EVENT_CHANNEL_CAPACITY);
+    // The WebSocket task is started before the first RPC snapshot. It emits
+    // Connected only after the confirmed-head subscription is acknowledged.
+    let ws_handle = tokio::spawn(ws::run(
+        cfg.ws_url.clone(),
+        tx.clone(),
+        disconnect_cache,
+        active_epoch.clone(),
+    ));
 
     let backpressure_handle = tokio::spawn(monitor_channel(tx));
     let quote_handle = tokio::spawn(run_demo_quotes(
@@ -95,10 +103,24 @@ async fn main() -> Result<()> {
         cfg.demo_quote_interval,
     ));
 
+    let rpc_url = cfg.rpc_url.clone();
+    let pool = cfg.pool;
+    let quote_caller = cfg.quote_caller;
+    let snapshot_timeout = cfg.snapshot_timeout;
     let event_loop = async move {
         while let Some(ev) = rx.recv().await {
-            if let Err(e) = handlers::dispatch(ev, &mut event_cache).await {
-                error!(error = %e, "handler failed");
+            if let Err(e) = snapshot_handler::dispatch(
+                ev,
+                &mut event_cache,
+                &rpc_url,
+                pool,
+                quote_caller,
+                snapshot_timeout,
+                &active_epoch,
+            )
+            .await
+            {
+                error!(error = %e, "canonical snapshot handler failed; quotes remain unavailable");
             }
         }
     };
@@ -130,11 +152,12 @@ async fn connect_cache(
     quote_caller: Address,
     timeout: Duration,
 ) -> Result<Cache> {
-    tokio::time::timeout(timeout, Cache::connect(redis_url, pool, quote_caller))
+    let result = tokio::time::timeout(timeout, Cache::connect(redis_url, pool, quote_caller))
         .await
         .context(
             "timed out while connecting to Redis; check that Redis is listening on REDIS_URL",
-        )?
+        )?;
+    result.map_err(|_| eyre::eyre!("failed to connect to Redis"))
 }
 
 async fn run_demo_quotes(mut cache: Cache, amount_in: U256, x_to_y: bool, interval: Duration) {
@@ -148,7 +171,7 @@ async fn run_demo_quotes(mut cache: Cache, amount_in: U256, x_to_y: bool, interv
 
     loop {
         tick.tick().await;
-        // This is intentionally Redis-only after startup. In production this
+        // This is intentionally Redis-only. In production this
         // function is the body of your HTTP/gRPC quote handler: read one cached
         // snapshot, check freshness, compute with lunarbase-pmm-math, return.
         match quoter::quote_exact_in(&mut cache, amount_in, x_to_y).await {
@@ -158,9 +181,10 @@ async fn run_demo_quotes(mut cache: Cache, amount_in: U256, x_to_y: bool, interv
                     amount_in = %amount_in,
                     amount_out = %q.amount_out,
                     fee = %q.fee,
+                    effective_fee_x24 = q.effective_fee_x24,
                     fee_multiplier = %q.fee_multiplier,
                     caller_whitelisted = q.caller_whitelisted,
-                    sqrt_price_next = q.sqrt_price_next,
+                    sqrt_price_next = %q.sqrt_price_next,
                     head_block = q.head_block,
                     latest_update_block = q.latest_update_block,
                     block_age = q.block_age,
@@ -174,7 +198,7 @@ async fn run_demo_quotes(mut cache: Cache, amount_in: U256, x_to_y: bool, interv
     }
 }
 
-async fn monitor_channel(tx: mpsc::Sender<ws::ChainEvent>) {
+async fn monitor_channel(tx: mpsc::Sender<ws::ConnectionEvent>) {
     let cap = tx.max_capacity();
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
     tick.tick().await;
@@ -200,13 +224,9 @@ fn init_tracing() {
         .init();
 }
 
-fn redact_redis(url: &str) -> String {
-    if let Some((scheme, rest)) = url.split_once("://") {
-        if let Some((auth, host)) = rest.split_once('@') {
-            if auth.contains(':') {
-                return format!("{scheme}://***@{host}");
-            }
-        }
-    }
-    url.to_owned()
+fn redact_endpoint(url: &str) -> String {
+    url.split_once("://").map_or_else(
+        || "<redacted>".to_owned(),
+        |(scheme, _)| format!("{scheme}://<redacted>"),
+    )
 }

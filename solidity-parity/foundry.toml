@@ -1,0 +1,11 @@
+[profile.default]
+src = "src"
+test = "test"
+out = "out"
+cache_path = "cache"
+libs = []
+solc_version = "0.8.31"
+optimizer = true
+optimizer_runs = 10000
+via_ir = true
+fs_permissions = [{ access = "read-write", path = "./generated" }]

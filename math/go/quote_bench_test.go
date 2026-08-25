@@ -8,12 +8,12 @@ import (
 
 func symmetricPool() *PoolParams {
 	return &PoolParams{
-		SqrtPriceX96:   new(uint256.Int).Set(q96), // price = 1.0
-		FeeAskX24:      (1 << 24) / 1_000,         // 0.10%
-		FeeBidX24:      (1 << 24) / 1_000,         // 0.10%
-		ReserveX:       uint256.NewInt(1_000_000_000_000_000_000),
-		ReserveY:       uint256.NewInt(1_000_000_000_000_000_000),
-		ConcentrationK: 5_000,
+		SqrtPriceX96:     new(uint256.Int).Set(q96), // price = 1.0
+		FeeAskX24:        Q24Scale / 1_000,          // 0.10%
+		FeeBidX24:        Q24Scale / 1_000,          // 0.10%
+		ReserveX:         uint256.NewInt(1_000_000_000_000_000_000),
+		ReserveY:         uint256.NewInt(1_000_000_000_000_000_000),
+		MaxPunishmentX24: Q24Scale / 1_000,
 	}
 }
 
@@ -23,12 +23,12 @@ func asymmetricPool() *PoolParams {
 	p.Mul(p, uint256.NewInt(3))
 	p.Rsh(p, 1) // divide by 2
 	return &PoolParams{
-		SqrtPriceX96:   p,
-		FeeAskX24:      (1 << 24) / 100, // 1.00%
-		FeeBidX24:      (1 << 24) / 333, // ~0.30%
-		ReserveX:       uint256.NewInt(750_000_000_000_000_000),
-		ReserveY:       uint256.NewInt(1_500_000_000_000_000_000),
-		ConcentrationK: 8_000,
+		SqrtPriceX96:     p,
+		FeeAskX24:        Q24Scale / 100, // 1.00%
+		FeeBidX24:        Q24Scale / 333, // ~0.30%
+		ReserveX:         uint256.NewInt(750_000_000_000_000_000),
+		ReserveY:         uint256.NewInt(1_500_000_000_000_000_000),
+		MaxPunishmentX24: Q24Scale / 1_000,
 	}
 }
 
@@ -121,4 +121,47 @@ func BenchmarkQuoteYToXInto_RejectedTooLarge(b *testing.B) {
 }
 func BenchmarkQuoteYToXInto_AsymmetricPool(b *testing.B) {
 	runBenchInto(b, QuoteYToXInto, asymmetricPool(), uint256.NewInt(10_000_000_000_000_000))
+}
+
+func BenchmarkQuoteXToYWithMultiplierInto(b *testing.B) {
+	params := symmetricPool()
+	amount := uint256.NewInt(10_000_000_000_000_000)
+	multiplier := uint256.NewInt(2)
+	out := newQuoteResult()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		QuoteXToYWithMultiplierInto(out, params, amount, multiplier)
+	}
+}
+
+func BenchmarkDesiredPunishmentX24(b *testing.B) {
+	params := symmetricPool()
+	amount := uint256.NewInt(10_000_000_000_000_000)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_, _ = DesiredPunishmentX24(params, amount, DirectionXToY)
+	}
+}
+
+func BenchmarkSimulateStandardTokenSwapInto(b *testing.B) {
+	params := symmetricPool()
+	amount := uint256.NewInt(10_000_000_000_000_000)
+	baseReserveX := new(uint256.Int).Set(params.ReserveX)
+	baseReserveY := new(uint256.Int).Set(params.ReserveY)
+	baseFeeAsk := params.FeeAskX24
+	baseFeeBid := params.FeeBidX24
+	out := newSwapSimulationResult()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		params.ReserveX.Set(baseReserveX)
+		params.ReserveY.Set(baseReserveY)
+		params.FeeAskX24 = baseFeeAsk
+		params.FeeBidX24 = baseFeeBid
+		if err := SimulateStandardTokenSwapInto(out, params, amount, one, DirectionXToY); err != nil {
+			b.Fatal(err)
+		}
+	}
 }

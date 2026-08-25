@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 4,
+  "solidityOracleCommit": "70dd5877f98e30c2de2667ab2106544bb2568281",
+  "solidityOracleDirty": false,
+  "forgeVersion": "1.7.1",
+  "forgeCommit": "4072e48705af9d93e3c0f6e29e93b5e9a40caed8",
+  "swapLibSha256": "1adf8303f0acdacaaef9794e6ffad8ae3773a80fda334e2394fa120a91f49748",
+  "peripheryLibSha256": "bc61b7f9ca85e895a86083815b0003d9c39f43cd773e4aae3b2e38f1f9070680",
+  "poolSha256": "839aa7de752b252bfbb158d084e0b3abacb314005c7270ffe37757a67a209ff8",
+  "fuzzSeed": "0x706d6d2d7061726974792d763200000000000000000000000000000000000001",
+  "fuzzRuns": 5000,
+  "deterministicRows": 49,
+  "fuzzRows": 10000,
+  "deterministicSha256": "e33994119616ae45c607b83c7283e3eb625fc4236e69a2b7e2e3982b39b2254e",
+  "fuzzSha256": "ff95a15cd3ceca39c4100e9214a9ce050cacdc6b8a1a69284c282e33e34a58ca"
+}

@@ -39,6 +39,16 @@ func TestPriceZeroMapsToZero(t *testing.T) {
 	}
 }
 
+func TestPriceConversionSaturatesAtUint160(t *testing.T) {
+	p := PriceToSqrtPriceX96(math.MaxFloat64)
+	if p.Cmp(maxSqrtPriceX96U160) != 0 {
+		t.Fatalf("large price expected uint160.max, got %s", p)
+	}
+	if p.BitLen() != 160 {
+		t.Fatalf("large price escaped uint160: bit length %d", p.BitLen())
+	}
+}
+
 func TestPriceNaNPanics(t *testing.T) {
 	defer func() {
 		if r := recover(); r == nil {

@@ -1,7 +1,7 @@
 {
   "name": "@lunarbase-lab/pmm-math",
-  "version": "0.3.0",
-  "description": "N-API binding for LunarBase v1 quote math with v2-style linear slippage, bit-exact with the on-chain contract.",
+  "version": "0.4.0",
+  "description": "N-API binding for LunarBase linear quotes and immediate directional punishment, bit-exact with Solidity.",
   "license": "MIT OR Apache-2.0",
   "type": "module",
   "main": "wrapper.js",
@@ -17,7 +17,9 @@
     "wrapper.js",
     "index.cjs",
     "index.d.ts",
-    "README.md"
+    "README.md",
+    "LICENSE-MIT",
+    "LICENSE-APACHE"
   ],
   "repository": {
     "type": "git",
@@ -53,20 +55,24 @@
     }
   },
   "optionalDependencies": {
-    "@lunarbase-lab/pmm-math-darwin-arm64": "0.3.0",
-    "@lunarbase-lab/pmm-math-linux-x64-gnu": "0.3.0",
-    "@lunarbase-lab/pmm-math-linux-arm64-gnu": "0.3.0",
-    "@lunarbase-lab/pmm-math-linux-x64-musl": "0.3.0"
+    "@lunarbase-lab/pmm-math-darwin-arm64": "0.4.0",
+    "@lunarbase-lab/pmm-math-linux-x64-gnu": "0.4.0",
+    "@lunarbase-lab/pmm-math-linux-arm64-gnu": "0.4.0",
+    "@lunarbase-lab/pmm-math-linux-x64-musl": "0.4.0"
   },
   "scripts": {
-    "build": "CARGO_TARGET_DIR=target napi build --platform --release && mv -f index.js index.cjs",
-    "build:debug": "CARGO_TARGET_DIR=target napi build --platform && mv -f index.js index.cjs",
+    "build": "CARGO_TARGET_DIR=target napi build --platform --release --js index.cjs --no-const-enum && npm run verify:metadata",
+    "build:debug": "CARGO_TARGET_DIR=target napi build --platform --js index.cjs --no-const-enum && npm run verify:metadata",
     "artifacts": "napi artifacts",
-    "test": "node --test test/quote.test.mjs",
-    "prepublishOnly": "napi prepublish -t npm --skip-gh-release"
+    "prepare:platform-packages": "node scripts/prepare-platform-packages.mjs",
+    "verify:metadata": "node scripts/verify-generated-metadata.mjs",
+    "test": "npm run test:types && node --test test/quote.test.mjs",
+    "test:types": "tsc -p tsconfig.test.json",
+    "prepublishOnly": "npm run prepare:platform-packages && napi prepublish -t npm --skip-gh-release"
   },
   "devDependencies": {
-    "@napi-rs/cli": "^2.18.4"
+    "@napi-rs/cli": "^2.18.4",
+    "typescript": "^5.5.0"
   },
   "engines": {
     "node": ">=18"

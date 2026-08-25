@@ -1,17 +1,21 @@
 #![allow(dead_code)]
 
 use eyre::Result;
-use lunarbase_pmm_math::{quote_x_to_y_with_multiplier, quote_y_to_x_with_multiplier, U256};
+use lunarbase_pmm_math::{
+    try_quote_x_to_y_with_multiplier, try_quote_y_to_x_with_multiplier, U256,
+};
 
-use crate::cache::Cache;
+use crate::canonical_cache::Cache;
+use crate::pool_state::PoolState;
 
 #[derive(Debug, Clone)]
 pub struct Quote {
     pub amount_out: U256,
     pub fee: U256,
-    /// Q64.96 sqrt-price the swap would settle at. Informational on
-    /// fix/incident: actual on-chain pool sqrtPriceX96 is operator-only.
-    pub sqrt_price_next: u128,
+    /// Directional fee used by the current quote before caller multiplier.
+    pub effective_fee_x24: u32,
+    /// Unchanged Q64.96 operator anchor retained by the Solidity quote ABI.
+    pub sqrt_price_next: U256,
     pub head_block: u64,
     pub latest_update_block: u64,
     pub block_age: u64,
@@ -21,35 +25,33 @@ pub struct Quote {
 
 #[derive(Debug, thiserror::Error)]
 pub enum QuoteError {
-    #[error("pool state not yet seeded")]
-    NoState,
-    #[error("head block unavailable; refusing to quote against unverifiable freshness")]
-    NoHead,
+    #[error("canonical snapshot is unsynchronized or unavailable")]
+    Unhealthy,
     #[error("pool is paused")]
     Paused,
     #[error("price is stale: blockAge={block_age} blockDelay={block_delay}")]
     Stale { block_age: u64, block_delay: u64 },
-    #[error("quote rejected by curve (no liquidity within bounds)")]
+    #[error("quote rejected (zero anchor output, insufficient reserve, or full effective fee)")]
     Rejected,
 }
 
 pub async fn quote_exact_in(cache: &mut Cache, amount_in: U256, x_to_y: bool) -> Result<Quote> {
     let snap = cache
         .snapshot()
-        .await?
-        .ok_or_else(|| eyre::eyre!(QuoteError::NoState))?;
+        .await
+        .map_err(|_| eyre::eyre!("canonical snapshot cache read failed"))?
+        .ok_or_else(|| eyre::eyre!(QuoteError::Unhealthy))?;
+    quote_from_snapshot(&snap, amount_in, x_to_y)
+}
 
+fn quote_from_snapshot(snap: &PoolState, amount_in: U256, x_to_y: bool) -> Result<Quote> {
     if snap.paused {
         return Err(QuoteError::Paused.into());
     }
 
-    let head = cache
-        .get_head_block()
-        .await?
-        .ok_or_else(|| eyre::eyre!(QuoteError::NoHead))?;
-    let block_age = head.saturating_sub(snap.latest_update_block);
+    let block_age = snap.block_age();
 
-    if !snap.is_fresh(head) {
+    if !snap.is_fresh() {
         return Err(QuoteError::Stale {
             block_age,
             block_delay: snap.block_delay,
@@ -67,10 +69,10 @@ pub async fn quote_exact_in(cache: &mut Cache, amount_in: U256, x_to_y: bool) ->
     // address is the caller to configure here.
     let fee_multiplier = snap.fee_multiplier;
     let result = if x_to_y {
-        quote_x_to_y_with_multiplier(&params, amount_in, fee_multiplier)
+        try_quote_x_to_y_with_multiplier(&params, amount_in, fee_multiplier)
     } else {
-        quote_y_to_x_with_multiplier(&params, amount_in, fee_multiplier)
-    };
+        try_quote_y_to_x_with_multiplier(&params, amount_in, fee_multiplier)
+    }?;
 
     if result.amount_out.is_zero() {
         return Err(QuoteError::Rejected.into());
@@ -79,11 +81,42 @@ pub async fn quote_exact_in(cache: &mut Cache, amount_in: U256, x_to_y: bool) ->
     Ok(Quote {
         amount_out: result.amount_out,
         fee: result.fee,
+        effective_fee_x24: result.effective_fee_x24,
         sqrt_price_next: result.sqrt_price_next,
-        head_block: head,
+        head_block: snap.snapshot_block,
         latest_update_block: snap.latest_update_block,
         block_age,
         fee_multiplier,
         caller_whitelisted: snap.caller_whitelisted,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state() -> PoolState {
+        PoolState {
+            snapshot_block: 100,
+            snapshot_block_hash: alloy::primitives::B256::repeat_byte(0x11),
+            sqrt_price_x96: (U256::from(1u64) << 160usize) - U256::from(1u64),
+            fee_ask_x24: 0,
+            fee_bid_x24: 0,
+            latest_update_block: 99,
+            reserve_x: (1u128 << 112) - 1,
+            reserve_y: (1u128 << 112) - 1,
+            max_punishment_x24: 0,
+            block_delay: 10,
+            paused: false,
+            fee_multiplier: U256::from(1u64),
+            caller_whitelisted: true,
+            blacklist_fee_multiplier: U256::from(2u64),
+        }
+    }
+
+    #[test]
+    fn checked_quote_reports_arithmetic_overflow_instead_of_panicking() {
+        let result = quote_from_snapshot(&state(), U256::MAX, true);
+        assert!(result.is_err());
+    }
 }

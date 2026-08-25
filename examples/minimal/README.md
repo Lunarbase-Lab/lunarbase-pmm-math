@@ -11,16 +11,19 @@ Paths are relative to the repository root.
 cargo run --manifest-path examples/minimal/rust/Cargo.toml
 ```
 
-The example pins the `0.3.0` API, uses Q64.96 state, and passes
-`fee_multiplier = 1` explicitly for the whitelisted aggregator path:
+The example pins the `0.4.0` API, uses the full Q64.96 `uint160` anchor
+domain, and passes `fee_multiplier = 1` for the whitelisted aggregator path.
+It prints both the immediate-punishment quote and the committed fee transition.
 
 ```
-X->Y  in=10000  out=9990  fee=9  pNext=79228120012965991766737027072
-Y->X  in=10000  out=9990  fee=9  pNext=79228200293196200550705659904
+X->Y  in=10000  out=9990  fee=10  effectiveFee=16786  pNext=79228162514264337593543950336
+      desiredPunishment=9 appliedPunishment=9 nextBidFee=16786
+Y->X  in=10000  out=9990  fee=10  effectiveFee=16786  pNext=79228162514264337593543950336
 ```
 
-`pNext` is the informational size-adjusted execution price returned by the quote; current
-Pool contracts do not persist it as their next anchor.
+`pNext` is retained for contract ABI compatibility and equals the operator
+anchor. Punishment is included in the triggering quote's effective directional
+fee and is persisted for the next swap only after successful settlement.
 
 The example crate has its own `Cargo.toml` and is excluded from the workspace.
 
@@ -42,8 +45,8 @@ npm install
 npm run run
 ```
 
-The `prerun` script builds the napi addon via `@napi-rs/cli`. The first
-invocation takes ~30 s while cargo compiles `napi-derive`; subsequent runs
-are instant.
+The package downloads the native addon for the current platform through npm
+`optionalDependencies`; consumers do not need a Rust toolchain.
 
-Requirements: Node.js 18+ on Linux or macOS.
+Requirements: Node.js 18+ on macOS arm64, Linux x64 glibc (GLIBC 2.17+),
+Linux arm64 glibc, or Linux x64 musl/Alpine.

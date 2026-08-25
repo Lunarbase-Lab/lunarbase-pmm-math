@@ -77,13 +77,13 @@ rust-test:
 	$(CARGO) test -p lunarbase-pmm-math
 
 rust-fmt:
-	$(CARGO) fmt -p lunarbase-pmm-math
+	$(CARGO) fmt --all
 
 rust-fmt-check:
-	$(CARGO) fmt -p lunarbase-pmm-math -- --check
+	$(CARGO) fmt --all -- --check
 
 rust-clippy:
-	$(CARGO) clippy -p lunarbase-pmm-math --all-targets -- -D warnings
+	$(CARGO) clippy --workspace --all-targets -- -D warnings
 
 # Cross-compile rust core via cargo-zigbuild. Examples:
 #   make rust-cross TARGET=aarch64-unknown-linux-gnu
@@ -101,7 +101,9 @@ node-build:
 	$(CARGO) build -p lunarbase-pmm-math-node --release
 
 node-test:
-	$(CARGO) test -p lunarbase-pmm-math-node
+	cd $(NODE_DIR) && npm ci --ignore-scripts --omit=optional
+	cd $(NODE_DIR) && npm run build:debug
+	cd $(NODE_DIR) && npm test
 
 node-clean:
 	$(CARGO) clean -p lunarbase-pmm-math-node
@@ -220,15 +222,16 @@ publish-dry-run: publish-crates-dry publish-npm-dry
 	@echo "  Bump versions in:"
 	@echo "    - Cargo.toml [workspace.package].version"
 	@echo "    - $(NODE_DIR)/package.json .version + .optionalDependencies values"
-	@echo "  Then: git tag vX.Y.Z && git push --tags"
+	@echo "  Then: git tag vX.Y.Z && git tag math/go/vX.Y.Z && git push --tags"
 
 # Convenience target that bumps the npm package version, prints the next steps,
 # and exits without pushing anything. Use VERSION=X.Y.Z.
 release-tag:
-	@if [ -z "$(VERSION)" ]; then echo "usage: make release-tag VERSION=0.3.0"; exit 1; fi
+	@if [ -z "$(VERSION)" ]; then echo "usage: make release-tag VERSION=0.4.0"; exit 1; fi
 	@echo "  →  reminder: bump Cargo.toml [workspace.package].version to $(VERSION)"
 	@echo "  →  reminder: bump $(NODE_DIR)/package.json .version and .optionalDependencies"
-	@echo "  →  then: git tag v$(VERSION) && git push origin v$(VERSION)"
+	@echo "  →  then: git tag v$(VERSION) && git tag math/go/v$(VERSION)"
+	@echo "  →  then: git push origin v$(VERSION) math/go/v$(VERSION)"
 
 # ---------- toolchain setup ----------
 # Verify zig + cargo-zigbuild are available on PATH.
