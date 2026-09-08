@@ -12,8 +12,8 @@ package.
 
 | Path | Package | Purpose |
 | --- | --- | --- |
-| `math/rust/lunarbase-pmm-math/` | `lunarbase-pmm-math` | Pure Rust core |
-| `math/rust-node/lunarbase-pmm-math-node/` | `@lunarbase-lab/pmm-math` | Native Node.js binding |
+| `math/rust/lunarbase-pmm-math/` | `lunarbase-pmm-math` | Pure Rust quote and order-book core |
+| `math/rust-node/lunarbase-pmm-math-node/` | `@lunarbase-lab/pmm-math` | Native Node.js quote and order-book binding |
 | `math/go/` | `lunarbasepmm` | Pure Go mirror |
 | `examples/minimal/{rust,go,typescript}/` | — | Minimal examples |
 | `examples/offchain-quoting/rust/` | — | Event-driven quote cache |
@@ -82,6 +82,11 @@ Names follow language conventions:
 | Quote with caller multiplier | `*_with_multiplier` | `*WithMultiplier` | `feeMultiplier` field |
 | Simulate standard-token X -> Y | `simulate_successful_swap(..., Direction::XToY, ...)` | `SimulateStandardTokenSwap(..., DirectionXToY)` | `simulateXToY` |
 | Simulate standard-token Y -> X | same with `YToX` | same with `DirectionYToX` | `simulateYToX` |
+| Build indicative directional ladders | `try_build_order_book` | — | `buildOrderBook` |
+| Certify bounded mixed-direction lot fills | `try_build_validated_order_book` | — | `buildValidatedOrderBook` |
+| Fit conservative multilevel prices with measured precision | `try_build_precise_order_book` | — | `buildPreciseOrderBook` |
+| Exact per-tranche output sum, optional cursor | `try_ladder_amount_out_at_cursor` | — | `ladderAmountOut` |
+| Build a power-of-two size grid | `geometric_sizes` | — | `geometricSizes` |
 
 Rust and Node simulations return the triggering quote (including
 `effectiveFeeX24`), desired/applied punishment, committed directional fees and
@@ -94,6 +99,44 @@ or accounting step fails.
 Node.js carries `uint112`, `uint160`, and `uint256` values as strict
 decimal or `0x`-hex strings. Q24 values are JavaScript numbers and are
 validated as finite integers before native conversion.
+
+## Order-book projection
+
+The Rust core and Node package project one coherent, caller-specific LunarBase
+Pool snapshot into independent X->Y and Y->X directional price ladders. This
+projection is independent of the order-book system consuming it; protocol
+adapters handle that system's wire format, publishing and execution rules.
+Each `{ size, price }` level has cumulative raw input size and a marginal raw
+output/input price scaled by `1e18`. The builder gates paused/stale state,
+quotes each cumulative size without mutating the snapshot, and enforces this
+library's 20-level cap and the Pool's `uint112` execution bounds.
+
+For production fill policies, `try_build_validated_order_book` /
+`buildValidatedOrderBook` exhaustively simulate all allowed partial and
+mixed-direction sequential fills and return conservative flat prices with
+explicit coverage counters. Work is strictly bounded and fails closed. The
+adapter must enforce the same lot/min/max policy and preserve `amountOutMinimum`
+for unmodeled state changes. Sampled books are explicitly `indicative`.
+The certificate covers the quote/reserve/punishment model, assuming standard
+token behavior and fully credited fees. Before signing, run
+`try_validate_fee_accounting_capacity` / `validateFeeAccountingCapacity` against
+the same snapshot to reject missing partner operators and insufficient uint112
+fee-bucket headroom. This is not a guarantee of arbitrary token/EVM call success.
+
+`try_build_precise_order_book` / `buildPreciseOrderBook` fit up to 20 levels
+within the same finite model, using a separate fitting-work budget. Results
+report whether the requested underquote target was achieved against the worst
+reachable state for each cursor/fill, plus a separate discount to the original
+snapshot's same-size quote. The target is measured, not assumed attainable;
+the existing flat and indicative APIs keep their behavior.
+
+It intentionally does not contain an event/cache engine, signing, a
+WebSocket publisher, or an on-chain adapter. Consumers must preserve the raw
+level, rounding, cursor and fill-policy semantics; transformations into a
+system-specific order book need separate validation. See
+[`docs/order-book.md`](docs/order-book.md) for the input contract, event list,
+example, and exact integer-rounding limitations that settlement adapters must
+guard with `amountOutMinimum`.
 
 ## Build and parity tests
 
@@ -126,7 +169,7 @@ make go-cross-all
 | --- | --- | --- |
 | crates.io | `lunarbase-pmm-math` | `cargo add lunarbase-pmm-math` |
 | npm | `@lunarbase-lab/pmm-math` | `npm install @lunarbase-lab/pmm-math` |
-| Go module | `github.com/Lunarbase-Lab/lunarbase-pmm-math/math/go` | `go get .../math/go@v0.4.0` |
+| Go module | `github.com/Lunarbase-Lab/lunarbase-pmm-math/math/go` | `go get .../math/go@v0.4.1` |
 
 Releases are cut by `.github/workflows/release.yml` after
 `make publish-dry-run` succeeds. A release commit must carry both the root tag

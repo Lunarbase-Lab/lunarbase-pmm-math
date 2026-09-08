@@ -11,7 +11,7 @@ Paths are relative to the repository root.
 cargo run --manifest-path examples/minimal/rust/Cargo.toml
 ```
 
-The example pins the `0.4.0` API, uses the full Q64.96 `uint160` anchor
+The Rust example pins the `0.4.1` API, uses the full Q64.96 `uint160` anchor
 domain, and passes `fee_multiplier = 1` for the whitelisted aggregator path.
 It prints both the immediate-punishment quote and the committed fee transition.
 

@@ -8,7 +8,7 @@ rust-version.workspace = true
 description = "Pure Rust mirror of LunarBase linear anchor quotes and directional punishment transitions."
 readme = "README.md"
 keywords = ["lunarbase", "pmm", "amm", "defi", "math"]
-categories = ["mathematics", "no-std::no-alloc"]
+categories = ["mathematics"]
 # Solidity-oracle parity fixtures are test-only and excluded from published crates.
 exclude = [
     "deterministic_vectors.jsonl",

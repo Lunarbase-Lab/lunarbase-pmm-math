@@ -1,6 +1,6 @@
 {
   "name": "@lunarbase-lab/pmm-math",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "N-API binding for LunarBase linear quotes and immediate directional punishment, bit-exact with Solidity.",
   "license": "MIT OR Apache-2.0",
   "type": "module",
@@ -55,10 +55,10 @@
     }
   },
   "optionalDependencies": {
-    "@lunarbase-lab/pmm-math-darwin-arm64": "0.4.0",
-    "@lunarbase-lab/pmm-math-linux-x64-gnu": "0.4.0",
-    "@lunarbase-lab/pmm-math-linux-arm64-gnu": "0.4.0",
-    "@lunarbase-lab/pmm-math-linux-x64-musl": "0.4.0"
+    "@lunarbase-lab/pmm-math-darwin-arm64": "0.4.1",
+    "@lunarbase-lab/pmm-math-linux-x64-gnu": "0.4.1",
+    "@lunarbase-lab/pmm-math-linux-arm64-gnu": "0.4.1",
+    "@lunarbase-lab/pmm-math-linux-x64-musl": "0.4.1"
   },
   "scripts": {
     "build": "CARGO_TARGET_DIR=target napi build --platform --release --js index.cjs --no-const-enum && npm run verify:metadata",
