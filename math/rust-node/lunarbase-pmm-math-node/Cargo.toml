@@ -13,7 +13,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 lunarbase-pmm-math = { path = "../../rust/lunarbase-pmm-math" }
-napi = { version = "2", features = ["napi4"] }
+napi = { version = "3", features = ["napi4"] }
 napi-derive = "2"
 ruint = { workspace = true }
 
