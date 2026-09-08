@@ -6,6 +6,14 @@ const require = createRequire(import.meta.url);
 const binding = require("./index.cjs");
 
 export const SwapSimulationStatus = binding.SwapSimulationStatus;
+export const OrderBookStatus = binding.OrderBookStatus;
+export const buildOrderBook = binding.buildOrderBook;
+export const buildValidatedOrderBook = binding.buildValidatedOrderBook;
+export const buildPreciseOrderBook = binding.buildPreciseOrderBook;
+export const validateFeeAccountingCapacity = binding.validateFeeAccountingCapacity;
+export const ladderAmountOut = binding.ladderAmountOut;
+export const OrderBookSafety = binding.OrderBookSafety;
+export const geometricSizes = binding.geometricSizes;
 export const quoteXToY = binding.quoteXToY;
 export const quoteYToX = binding.quoteYToX;
 export const simulateXToY = binding.simulateXToY;

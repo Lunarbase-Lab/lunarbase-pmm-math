@@ -16,7 +16,7 @@ directional punishment state transitions (**Q64.96** sqrt-price design).
 
 ```toml
 [dependencies]
-lunarbase-pmm-math = "0.4"
+lunarbase-pmm-math = "0.4.1"
 ```
 
 ```rust
@@ -57,7 +57,53 @@ derive the multiplier from `msg.sender`; for a non-whitelisted caller, pass
 | `try_punishment_x24` / `try_apply_punishment`                             | Desired ceil-rounded increment and saturating transition.  |
 | `try_apply_update`                                                        | Replace anchor and both effective fees like operator `upd`. |
 | `try_simulate_successful_swap`                                            | Immediate fee/reserve transition with rollback marker.     |
+| `try_build_order_book`                                                    | Pure directional `{size, price}` ladder projection.        |
+| `try_build_validated_order_book`                                          | Exhaustive bounded mixed-direction fill-policy guarantee.  |
+| `try_build_precise_order_book`                                            | Adaptive multilevel fitting with measured precision.       |
+| `try_validate_fee_accounting_capacity`                                    | Fully credited fee and conservative uint112 bucket preflight. |
+| `geometric_sizes` / `try_ladder_amount_out`                               | Power-of-two size grid and exact ladder sweep helper.       |
 | `price_to_sqrt_price_x96` / `sqrt_price_x96_to_price`                     | Lossy `f64` decimal price ↔ Q64.96 `U256`.                  |
+
+## Order-book projection
+
+`OrderBookState` combines `PoolParams` with the cached snapshot block,
+freshness fields, pause state, and the fee multiplier of the actual execution
+caller. `try_build_order_book` returns empty paused/stale sides or two active
+directional ladders, independent of any particular order-book system. Each
+level's size is cumulative raw input and its price is marginal raw output/input
+scaled by `1e18`. Size grids are explicit risk policy; use `geometric_sizes`
+for a power-of-two grid. Protocol-specific adapters translate this format and
+must preserve or separately revalidate its rounding and execution semantics.
+
+At emitted cumulative prefixes the floor-rounded ladder never promises more
+than the exact Pool quote. Nested integer rounding means this does not by itself
+guarantee every arbitrary partial or lifetime-cursor fill. A production
+adapter must preserve `amountOutMinimum`, and the publisher should use tested
+lot sizes, short expiries, and rebuild after Pool events.
+
+`try_build_validated_order_book` accepts `FillPolicy` for both directions and
+an explicit transition budget. It checks every reachable lot-aligned fill and
+exact Pool state transition, including interleavings, then chooses a safe flat
+price per direction. `OrderBookSafety::ExhaustiveLotPolicy` covers this finite
+domain only; external updates or concurrently live generations require the
+adapter guard. The result contains its source state, policy, and coverage
+counters. See the repository's `docs/order-book.md` for the proof and limits.
+The certificate concerns the price/reserve/punishment model. Before publication,
+preflight `FeeAccountingState` from the same snapshot with
+`try_validate_fee_accounting_capacity`: partner share uses `BPS=1_000_000`, a
+positive share requires a partner operator, and relevant treasury/global
+partner/per-router fee buckets need conservative uint112 headroom. Standard
+ERC20 behavior and successful external calls remain separate preconditions.
+Initial stored reserves must reconcile with token balances minus pending
+deposit escrow and global fee buckets; unsynced donations are not modeled.
+
+`try_build_precise_order_book` fits up to 20 levels per direction under the same
+finite policy. `OrderBookPrecision` sets the level cap, target underquote in
+basis points and a separate fitting-work budget. Results report achieved
+precision and `target_met`; require that flag, active status and the same
+accounting/state preconditions before publishing at the requested tolerance.
+The guarantee applies to the exact raw levels, not automatically to a target
+system's packed, rounded or merged representation.
 
 ## Testing
 

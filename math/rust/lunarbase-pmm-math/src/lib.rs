@@ -28,7 +28,11 @@
 //! let _ = non_whitelisted.amount_out;
 //! ```
 
+pub mod fee_accounting;
 pub mod mechanism;
+pub mod order_book;
+pub mod order_book_policy;
+pub mod order_book_precision;
 pub mod uint256;
 
 /// Backward-compatible module path for consumers that imported the former
@@ -42,6 +46,10 @@ pub mod curve_pmm {
     pub use crate::mechanism::*;
 }
 
+pub use fee_accounting::{
+    try_validate_fee_accounting_capacity, FeeAccountingError, FeeAccountingState, FeeBucket,
+    PARTNER_FEE_SCALE,
+};
 pub use mechanism::{
     apply_fee, apply_punishment, apply_update, price_to_sqrt_price_x96, punishment_x24,
     quote_x_to_y, quote_x_to_y_with_multiplier, quote_y_to_x, quote_y_to_x_with_multiplier,
@@ -51,5 +59,18 @@ pub use mechanism::{
     try_simulate_successful_swap, try_x_value_in_y, x_value_in_y, Direction, MathError, PoolParams,
     PunishmentTransition, QuoteResult, RollbackReason, SimulationStatus, SwapSimulation,
     MAX_PUNISHMENT_X24, MAX_U112, MAX_U160, MAX_U24, Q24, Q96,
+};
+pub use order_book::{
+    geometric_sizes, try_build_order_book, try_ladder_amount_out, try_ladder_amount_out_at_cursor,
+    DirectionalLadder, OrderBook, OrderBookConfig, OrderBookError, OrderBookLevel, OrderBookSafety,
+    OrderBookState, OrderBookStatus, MAX_ORDER_BOOK_LEVELS, PRICE_SCALE_X18,
+};
+pub use order_book_policy::{
+    try_build_validated_order_book, FillPolicy, FillPolicyError, ValidatedOrderBook,
+    ValidatedOrderBookConfig, MAX_VALIDATION_TRANSITIONS,
+};
+pub use order_book_precision::{
+    try_build_precise_order_book, OrderBookPrecision, PreciseOrderBook, PreciseOrderBookError,
+    MAX_PRECISION_WORK,
 };
 pub use uint256::{U256Ext, U256};

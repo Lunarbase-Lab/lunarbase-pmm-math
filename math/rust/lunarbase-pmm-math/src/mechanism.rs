@@ -594,6 +594,13 @@ fn rolled_back_punishment(
 /// by `amount_in`, while the output active reserve decreases by
 /// `quote.amount_out + quote.fee`. The quote already includes the current
 /// punishment; that effective fee is committed only when settlement succeeds.
+/// Full-gross reserve subtraction also requires all charged fees to be credited
+/// (`partner fee == 0` or a configured partner operator) and adequate uint112
+/// treasury/global partner/per-router fee-bucket capacity. These fields are
+/// outside [`PoolParams`]; publication can preflight them with
+/// [`crate::try_validate_fee_accounting_capacity`].
+/// Initial active reserves must also match the token balance partition after
+/// pending deposits and global fees; an unsynced donation is not modeled.
 /// External transfer failures can be marked afterwards with
 /// [`SwapSimulation::mark_rolled_back`].
 pub fn try_simulate_successful_swap(

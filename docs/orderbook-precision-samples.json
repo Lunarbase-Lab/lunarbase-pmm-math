@@ -1,0 +1,329 @@
+{
+  "kind": "synthetic-not-live",
+  "command": "cargo run -p lunarbase-pmm-math --release --example orderbook_precision",
+  "rounding": "bps fields ceil to whole bps; microbps fields ceil to 1e-6 bps",
+  "measurements": [
+    {
+      "builder": "reference_geometric_20",
+      "maxExcessRawOutputX": "0",
+      "maxExcessRawOutputY": "0",
+      "sample": "flat_no_punishment",
+      "synthetic": true,
+      "worstUnderquoteBpsCeil": 1,
+      "worstUnderquoteMicroBpsCeil": 41843,
+      "xLevels": 20,
+      "yLevels": 20
+    },
+    {
+      "anchorPriceX96": "3961408125713216879677197",
+      "checkedStates": 225,
+      "checkedTransitions": 699,
+      "constraints": 30,
+      "feeAskX24": 1677,
+      "feeBidX24": 1677,
+      "independentReplayMaxExcessRawOutput": "0",
+      "lotsPerDirection": 8,
+      "maxFillLots": 2,
+      "maxLevels": 1,
+      "maxPunishmentX24": 0,
+      "reserveX": "100000000000000000000",
+      "reserveY": "250000000000",
+      "sample": "flat_no_punishment",
+      "synthetic": true,
+      "targetMet": true,
+      "targetUnderquoteBps": 1,
+      "workUsed": 300,
+      "worstFreshSnapshotDiscountBpsCeil": 1,
+      "worstUnderquoteBpsCeil": 1,
+      "worstUnderquoteMicroBpsCeil": 3,
+      "xToY": [
+        {
+          "price": "2499750107",
+          "size": "8000000000000000000"
+        }
+      ],
+      "yToX": [
+        {
+          "price": "399960017204284668199999999",
+          "size": "20000000000"
+        }
+      ]
+    },
+    {
+      "anchorPriceX96": "3961408125713216879677197",
+      "checkedStates": 225,
+      "checkedTransitions": 699,
+      "constraints": 30,
+      "feeAskX24": 1677,
+      "feeBidX24": 1677,
+      "independentReplayMaxExcessRawOutput": "0",
+      "lotsPerDirection": 8,
+      "maxFillLots": 2,
+      "maxLevels": 20,
+      "maxPunishmentX24": 0,
+      "reserveX": "100000000000000000000",
+      "reserveY": "250000000000",
+      "sample": "flat_no_punishment",
+      "synthetic": true,
+      "targetMet": true,
+      "targetUnderquoteBps": 1,
+      "workUsed": 300,
+      "worstFreshSnapshotDiscountBpsCeil": 1,
+      "worstUnderquoteBpsCeil": 1,
+      "worstUnderquoteMicroBpsCeil": 3,
+      "xToY": [
+        {
+          "price": "2499750107",
+          "size": "8000000000000000000"
+        }
+      ],
+      "yToX": [
+        {
+          "price": "399960017204284668199999999",
+          "size": "20000000000"
+        }
+      ]
+    },
+    {
+      "builder": "reference_geometric_20",
+      "maxExcessRawOutputX": "0",
+      "maxExcessRawOutputY": "0",
+      "sample": "weth_usdc_moderate_punishment",
+      "synthetic": true,
+      "worstUnderquoteBpsCeil": 4,
+      "worstUnderquoteMicroBpsCeil": 3500614,
+      "xLevels": 20,
+      "yLevels": 20
+    },
+    {
+      "anchorPriceX96": "3961408125713216879677197",
+      "checkedStates": 225,
+      "checkedTransitions": 699,
+      "constraints": 30,
+      "feeAskX24": 1677,
+      "feeBidX24": 1677,
+      "independentReplayMaxExcessRawOutput": "0",
+      "lotsPerDirection": 8,
+      "maxFillLots": 2,
+      "maxLevels": 1,
+      "maxPunishmentX24": 167772,
+      "reserveX": "100000000000000000000",
+      "reserveY": "250000000000",
+      "sample": "weth_usdc_moderate_punishment",
+      "synthetic": true,
+      "targetMet": false,
+      "targetUnderquoteBps": 1,
+      "workUsed": 300,
+      "worstFreshSnapshotDiscountBpsCeil": 4,
+      "worstUnderquoteBpsCeil": 4,
+      "worstUnderquoteMicroBpsCeil": 3501106,
+      "xToY": [
+        {
+          "price": "2498749941",
+          "size": "8000000000000000000"
+        }
+      ],
+      "yToX": [
+        {
+          "price": "399799990653991699599999999",
+          "size": "20000000000"
+        }
+      ]
+    },
+    {
+      "anchorPriceX96": "3961408125713216879677197",
+      "checkedStates": 225,
+      "checkedTransitions": 699,
+      "constraints": 30,
+      "feeAskX24": 1677,
+      "feeBidX24": 1677,
+      "independentReplayMaxExcessRawOutput": "0",
+      "lotsPerDirection": 8,
+      "maxFillLots": 2,
+      "maxLevels": 20,
+      "maxPunishmentX24": 167772,
+      "reserveX": "100000000000000000000",
+      "reserveY": "250000000000",
+      "sample": "weth_usdc_moderate_punishment",
+      "synthetic": true,
+      "targetMet": true,
+      "targetUnderquoteBps": 1,
+      "workUsed": 12908,
+      "worstFreshSnapshotDiscountBpsCeil": 4,
+      "worstUnderquoteBpsCeil": 1,
+      "worstUnderquoteMicroBpsCeil": 500310,
+      "xToY": [
+        {
+          "price": "2499500066",
+          "size": "2000000000000000000"
+        },
+        {
+          "price": "2499250024",
+          "size": "4000000000000000000"
+        },
+        {
+          "price": "2498999983",
+          "size": "6000000000000000000"
+        },
+        {
+          "price": "2498749941",
+          "size": "8000000000000000000"
+        }
+      ],
+      "yToX": [
+        {
+          "price": "399920010566711425999999999",
+          "size": "5000000000"
+        },
+        {
+          "price": "399880003929138183799999999",
+          "size": "10000000000"
+        },
+        {
+          "price": "399839997291564941799999999",
+          "size": "15000000000"
+        },
+        {
+          "price": "399799990653991699599999999",
+          "size": "20000000000"
+        }
+      ]
+    },
+    {
+      "builder": "reference_geometric_20",
+      "maxExcessRawOutputX": "0",
+      "maxExcessRawOutputY": "0",
+      "sample": "weth_usdc_high_punishment",
+      "synthetic": true,
+      "worstUnderquoteBpsCeil": 36,
+      "worstUnderquoteMicroBpsCeil": 35089893,
+      "xLevels": 20,
+      "yLevels": 20
+    },
+    {
+      "anchorPriceX96": "3961408125713216879677197",
+      "checkedStates": 225,
+      "checkedTransitions": 699,
+      "constraints": 30,
+      "feeAskX24": 1677,
+      "feeBidX24": 1677,
+      "independentReplayMaxExcessRawOutput": "0",
+      "lotsPerDirection": 8,
+      "maxFillLots": 2,
+      "maxLevels": 1,
+      "maxPunishmentX24": 1677721,
+      "reserveX": "100000000000000000000",
+      "reserveY": "250000000000",
+      "sample": "weth_usdc_high_punishment",
+      "synthetic": true,
+      "targetMet": false,
+      "targetUnderquoteBps": 1,
+      "workUsed": 300,
+      "worstFreshSnapshotDiscountBpsCeil": 36,
+      "worstUnderquoteBpsCeil": 36,
+      "worstUnderquoteMicroBpsCeil": 35022649,
+      "xToY": [
+        {
+          "price": "2489749640",
+          "size": "8000000000000000000"
+        }
+      ],
+      "yToX": [
+        {
+          "price": "398359942436218261999999999",
+          "size": "20000000000"
+        }
+      ]
+    },
+    {
+      "anchorPriceX96": "3961408125713216879677197",
+      "checkedStates": 225,
+      "checkedTransitions": 699,
+      "constraints": 30,
+      "feeAskX24": 1677,
+      "feeBidX24": 1677,
+      "independentReplayMaxExcessRawOutput": "0",
+      "lotsPerDirection": 8,
+      "maxFillLots": 2,
+      "maxLevels": 20,
+      "maxPunishmentX24": 1677721,
+      "reserveX": "100000000000000000000",
+      "reserveY": "250000000000",
+      "sample": "weth_usdc_high_punishment",
+      "synthetic": true,
+      "targetMet": false,
+      "targetUnderquoteBps": 1,
+      "workUsed": 30726,
+      "worstFreshSnapshotDiscountBpsCeil": 36,
+      "worstUnderquoteBpsCeil": 6,
+      "worstUnderquoteMicroBpsCeil": 5018301,
+      "xToY": [
+        {
+          "price": "2497249991",
+          "size": "1000000000000000000"
+        },
+        {
+          "price": "2497249990",
+          "size": "2000000000000000000"
+        },
+        {
+          "price": "2494749874",
+          "size": "3000000000000000000"
+        },
+        {
+          "price": "2494749873",
+          "size": "4000000000000000000"
+        },
+        {
+          "price": "2492249757",
+          "size": "6000000000000000000"
+        },
+        {
+          "price": "2489749640",
+          "size": "8000000000000000000"
+        }
+      ],
+      "yToX": [
+        {
+          "price": "399559998512268067199999999",
+          "size": "2500000000"
+        },
+        {
+          "price": "399559998512268066799999999",
+          "size": "5000000000"
+        },
+        {
+          "price": "399159979820251465599999999",
+          "size": "7500000000"
+        },
+        {
+          "price": "399159979820251465199999999",
+          "size": "10000000000"
+        },
+        {
+          "price": "398759961128234863999999999",
+          "size": "12500000000"
+        },
+        {
+          "price": "398759961128234863599999999",
+          "size": "15000000000"
+        },
+        {
+          "price": "398359942436218262399999999",
+          "size": "17500000000"
+        },
+        {
+          "price": "398359942436218261999999999",
+          "size": "20000000000"
+        }
+      ]
+    },
+    {
+      "actualPoolOutput": "1",
+      "amountIn": "1",
+      "excessRawOutputUnits": "1",
+      "sample": "raw_unit_rounding_counterexample",
+      "sampledPromise": "2"
+    }
+  ]
+}

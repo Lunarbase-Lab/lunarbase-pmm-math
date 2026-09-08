@@ -310,13 +310,21 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { SwapSimulationStatus, quoteXToY, quoteYToX, simulateXToY, simulateYToX, priceToSqrtPriceX96, price_to_sqrt_price_x96, sqrtPriceX96ToPrice, sqrt_price_x96_to_price } = nativeBinding
+const { OrderBookStatus, OrderBookSafety, SwapSimulationStatus, quoteXToY, quoteYToX, simulateXToY, simulateYToX, buildOrderBook, buildValidatedOrderBook, buildPreciseOrderBook, validateFeeAccountingCapacity, ladderAmountOut, geometricSizes, priceToSqrtPriceX96, price_to_sqrt_price_x96, sqrtPriceX96ToPrice, sqrt_price_x96_to_price } = nativeBinding
 
+module.exports.OrderBookStatus = OrderBookStatus
+module.exports.OrderBookSafety = OrderBookSafety
 module.exports.SwapSimulationStatus = SwapSimulationStatus
 module.exports.quoteXToY = quoteXToY
 module.exports.quoteYToX = quoteYToX
 module.exports.simulateXToY = simulateXToY
 module.exports.simulateYToX = simulateYToX
+module.exports.buildOrderBook = buildOrderBook
+module.exports.buildValidatedOrderBook = buildValidatedOrderBook
+module.exports.buildPreciseOrderBook = buildPreciseOrderBook
+module.exports.validateFeeAccountingCapacity = validateFeeAccountingCapacity
+module.exports.ladderAmountOut = ladderAmountOut
+module.exports.geometricSizes = geometricSizes
 module.exports.priceToSqrtPriceX96 = priceToSqrtPriceX96
 module.exports.price_to_sqrt_price_x96 = price_to_sqrt_price_x96
 module.exports.sqrtPriceX96ToPrice = sqrtPriceX96ToPrice

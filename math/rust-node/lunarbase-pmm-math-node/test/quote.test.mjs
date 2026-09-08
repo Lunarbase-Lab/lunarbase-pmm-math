@@ -5,7 +5,15 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 const binding = await import(process.env.PMM_MATH_BINDING ?? "../wrapper.js");
 const {
+  OrderBookStatus,
+  OrderBookSafety,
   SwapSimulationStatus,
+  buildOrderBook,
+  buildValidatedOrderBook,
+  buildPreciseOrderBook,
+  validateFeeAccountingCapacity,
+  ladderAmountOut,
+  geometricSizes,
   priceToSqrtPriceX96,
   price_to_sqrt_price_x96,
   quoteXToY,
@@ -15,6 +23,266 @@ const {
   sqrtPriceX96ToPrice,
   sqrt_price_x96_to_price,
 } = binding;
+
+function activeOrderBookParams(overrides = {}) {
+  return {
+    sqrtPriceX96: "79228162514264337593543950336",
+    feeAskX24: 0,
+    feeBidX24: 0,
+    reserveX: "1000000",
+    reserveY: "1000000",
+    maxPunishmentX24: 0,
+    feeMultiplier: "1",
+    snapshotBlock: "100",
+    maxExecutionBlock: "101",
+    latestUpdateBlock: "99",
+    blockDelay: "3",
+    paused: false,
+    xToYSizes: ["100", "1000"],
+    yToXSizes: ["100", "1000"],
+    ...overrides,
+  };
+}
+
+describe("order-book builder", () => {
+  it("builds two directional cumulative-size ladders", () => {
+    assert.deepEqual(geometricSizes("64", 4), ["8", "16", "32", "64"]);
+    const book = buildOrderBook(activeOrderBookParams());
+
+    assert.equal(book.status, OrderBookStatus.Active);
+    assert.equal(book.safety, OrderBookSafety.Indicative);
+    assert.equal(book.snapshotBlock, "100");
+    assert.equal(book.maxExecutionBlock, "101");
+    assert.equal(book.requiresAmountOutMinimum, true);
+    assert.deepEqual(book.xToY, {
+      levels: [
+        { size: "100", price: "1000000000000000000" },
+        { size: "1000", price: "1000000000000000000" },
+      ],
+      truncated: false,
+    });
+    assert.deepEqual(book.yToX, book.xToY);
+  });
+
+  it("fails closed for paused and stale snapshots", () => {
+    const paused = buildOrderBook(activeOrderBookParams({ paused: true }));
+    assert.equal(paused.status, OrderBookStatus.Paused);
+    assert.deepEqual(paused.xToY.levels, []);
+    assert.deepEqual(paused.yToX.levels, []);
+
+    const stale = buildOrderBook(activeOrderBookParams({ maxExecutionBlock: "102" }));
+    assert.equal(stale.status, OrderBookStatus.Stale);
+    assert.deepEqual(stale.xToY.levels, []);
+  });
+
+  it("validates cached state and cumulative size grids strictly", () => {
+    assert.throws(
+      () => buildOrderBook(activeOrderBookParams({ xToYSizes: ["100", "100"] })),
+      /not strictly increasing/,
+    );
+    assert.throws(
+      () => buildOrderBook(activeOrderBookParams({ blockDelay: "0" })),
+      /block_delay must be non-zero/,
+    );
+    assert.throws(
+      () => buildOrderBook(activeOrderBookParams({ feeMultiplier: "0" })),
+      /fee_multiplier must be non-zero/,
+    );
+    assert.throws(
+      () => geometricSizes("100", 21),
+      /levels must be an integer/,
+    );
+  });
+});
+
+describe("validated order-book policy", () => {
+  const lot = { minInput: "10", lotInput: "10", maxInput: "20", totalInput: "30" };
+  const config = { xToY: lot, yToX: lot, maxTransitions: 10000 };
+  const accounting = { partnerFee: 0, partnerOperatorPresent: false,
+    treasuryX: "0", treasuryY: "0", partnerX: "0", partnerY: "0",
+    routerPartnerX: "0", routerPartnerY: "0" };
+
+  it("requires credited fees and bounds treasury/global/router bucket growth", () => {
+    const snapshot = activeOrderBookParams();
+    assert.doesNotThrow(() => validateFeeAccountingCapacity(snapshot, config, accounting));
+    assert.throws(() => validateFeeAccountingCapacity(snapshot, config,
+      { ...accounting, partnerFee: 1 }), /requires an operator/);
+    for (const partnerFee of [-1, 1.5, NaN, Infinity, 1000001]) {
+      assert.throws(() => validateFeeAccountingCapacity(snapshot, config,
+        { ...accounting, partnerFee }), /partnerFee must be an integer/);
+    }
+    const maximum = (1n << 112n) - 1n;
+    assert.throws(() => validateFeeAccountingCapacity(snapshot, config,
+      { ...accounting, treasuryY: String(maximum) }), /headroom/);
+    assert.throws(() => validateFeeAccountingCapacity(snapshot, config,
+      { ...accounting, partnerFee: 500000, partnerOperatorPresent: true,
+        routerPartnerX: String(maximum) }), /headroom/);
+  });
+
+  it("certifies and independently replays every mixed-direction fill sequence", () => {
+    const snapshot = activeOrderBookParams({ maxPunishmentX24: 1000000, feeBidX24: 1234 });
+    const original = structuredClone(snapshot);
+    validateFeeAccountingCapacity(snapshot, config, accounting);
+    const result = buildValidatedOrderBook(snapshot, config);
+    assert.equal(result.book.safety, OrderBookSafety.ExhaustiveLotPolicy);
+    assert.equal(result.book.requiresAmountOutMinimum, true);
+    assert.ok(result.checkedStates > 1);
+    assert.ok(result.checkedTransitions > 1);
+    assert.deepEqual(snapshot, original);
+
+    function replay(state, cursors) {
+      for (const [side, simulate] of [["xToY", simulateXToY], ["yToX", simulateYToX]]) {
+        for (const amount of [10n, 20n]) {
+          if (cursors[side] + amount > 30n) continue;
+          const promised = ladderAmountOut(result.book[side].levels, String(amount), String(cursors[side]));
+          const actual = simulate({ ...state, amountIn: String(amount) });
+          assert.equal(actual.status, SwapSimulationStatus.Applied);
+          assert.ok(BigInt(promised) > 0n);
+          assert.ok(BigInt(promised) <= BigInt(actual.amountOut));
+          replay({ ...state, reserveX: actual.reserveXAfter, reserveY: actual.reserveYAfter,
+            feeAskX24: actual.feeAskX24After, feeBidX24: actual.feeBidX24After },
+          { ...cursors, [side]: cursors[side] + amount });
+        }
+      }
+    }
+    replay(snapshot, { xToY: 0n, yToX: 0n });
+  });
+
+  it("fails closed on malformed policies, budget exhaustion, pause and stale state", () => {
+    const snapshot = activeOrderBookParams();
+    assert.throws(() => buildValidatedOrderBook(snapshot, { ...config, maxTransitions: 1 }), /budget exceeded/);
+    for (const maxTransitions of [0, -1, 1.5, NaN, Infinity, 100001]) {
+      assert.throws(() => buildValidatedOrderBook(snapshot, { ...config, maxTransitions }), /maxTransitions/);
+    }
+    assert.throws(() => buildValidatedOrderBook(snapshot, { ...config,
+      xToY: { ...lot, minInput: "11" } }), /aligned/);
+    const paused = buildValidatedOrderBook({ ...snapshot, paused: true }, config);
+    assert.equal(paused.book.status, OrderBookStatus.Paused);
+    assert.equal(paused.book.safety, OrderBookSafety.Indicative);
+    assert.equal(paused.checkedStates, 0);
+    assert.deepEqual(paused.book.xToY.levels, []);
+    assert.equal(buildValidatedOrderBook({ ...snapshot, maxExecutionBlock: "102" }, config).book.status, OrderBookStatus.Stale);
+  });
+
+  it("uses exact tranche sums without a lossy VWAP round-trip", () => {
+    const levels = [{ size: "3", price: "500000000000000000" },
+      { size: "7", price: "250000000000000000" }];
+    assert.equal(ladderAmountOut(levels, "3"), "1");
+    assert.equal(ladderAmountOut(levels, "7"), "2");
+    assert.equal(ladderAmountOut(levels, "4", "3"), "1");
+    assert.equal(ladderAmountOut(levels, "5", "3"), null);
+    assert.throws(() => ladderAmountOut([...levels].reverse(), "1"), /not strictly increasing|improving/);
+    assert.throws(() => ladderAmountOut([{ size: "1", price: "0" }], "1"), /price is zero/);
+    assert.throws(() => ladderAmountOut(Array(21).fill(levels[0]), "1"), /exceeds 20 levels/);
+  });
+});
+
+describe("precise multilevel order-book policy", () => {
+  const snapshot = activeOrderBookParams({ maxPunishmentX24: 8_388_608 });
+  const lot = { minInput: "50000", lotInput: "50000", maxInput: "50000", totalInput: "200000" };
+  const config = { xToY: lot, maxTransitions: 10000 };
+  const precision = { maxLevels: 4, targetUnderquoteBps: 0, maxWork: 5_000_000 };
+
+  it("fits distinct prices and reports the actual worst-state and fresh-snapshot errors", () => {
+    const original = structuredClone({ snapshot, config, precision });
+    const result = buildPreciseOrderBook(snapshot, config, precision);
+    const book = result.validated.book;
+    assert.equal(book.status, OrderBookStatus.Active);
+    assert.equal(book.safety, OrderBookSafety.ExhaustiveLotPolicy);
+    assert.ok(book.xToY.levels.length >= 2);
+    assert.ok(book.xToY.levels.length <= precision.maxLevels);
+    assert.ok(new Set(book.xToY.levels.map((level) => level.price)).size >= 2);
+    assert.equal(result.targetMet, true);
+    assert.equal(result.worstUnderquoteBps, 0);
+    // Zero discretization error is not zero discount to the initial quote:
+    // each subsequent swap raises the Pool's directional fee.
+    assert.ok(result.worstFreshSnapshotDiscountBps > 0);
+    assert.ok(result.workUsed > 0 && result.workUsed <= precision.maxWork);
+    assert.ok(result.constraintCount > 0);
+    assert.deepEqual({ snapshot, config, precision }, original);
+  });
+
+  it("returns an honest target-unmet result for a coarse level limit", () => {
+    const result = buildPreciseOrderBook(snapshot, config, { ...precision, maxLevels: 1 });
+    assert.equal(result.validated.book.xToY.levels.length, 1);
+    assert.equal(result.targetMet, false);
+    assert.ok(result.worstUnderquoteBps > 0);
+    assert.equal(result.validated.book.safety, OrderBookSafety.ExhaustiveLotPolicy);
+    const oldApi = buildValidatedOrderBook(snapshot, config);
+    assert.deepEqual(oldApi.book.xToY.levels, [{ size: "200000", price: "950000000000000000" }]);
+    // Exact floor-aware fitting can increase the encoded scalar while keeping
+    // the same safe delivered amount; the legacy API retains its old chord.
+    for (const cursor of ["0", "50000", "100000", "150000"]) {
+      assert.ok(BigInt(ladderAmountOut(result.validated.book.xToY.levels, "50000", cursor)) >=
+        BigInt(ladderAmountOut(oldApi.book.xToY.levels, "50000", cursor)));
+    }
+  });
+
+  it("independently checks every mixed-direction fill and recomputes both error metrics", () => {
+    const mixedLot = { ...lot, maxInput: "100000", totalInput: "150000" };
+    const mixedConfig = { xToY: mixedLot, yToX: mixedLot, maxTransitions: 10000 };
+    const result = buildPreciseOrderBook(snapshot, mixedConfig, { ...precision, maxLevels: 3 });
+    const constraints = new Map();
+    function replay(state, cursors) {
+      for (const [side, simulate, freshQuote] of [
+        ["xToY", simulateXToY, quoteXToY], ["yToX", simulateYToX, quoteYToX],
+      ]) {
+        const levels = result.validated.book[side].levels;
+        for (const amount of [50000n, 100000n]) {
+          if (cursors[side] + amount > 150000n) continue;
+          const promised = BigInt(ladderAmountOut(levels, String(amount), String(cursors[side])));
+          const actual = simulate({ ...state, amountIn: String(amount) });
+          assert.equal(actual.status, SwapSimulationStatus.Applied);
+          assert.ok(promised > 0n && promised <= BigInt(actual.amountOut));
+          const key = `${side}:${cursors[side]}:${amount}`;
+          const previous = constraints.get(key);
+          const output = BigInt(actual.amountOut);
+          constraints.set(key, {
+            promised,
+            minimum: previous && previous.minimum < output ? previous.minimum : output,
+            fresh: BigInt(freshQuote({ ...snapshot, amountIn: String(amount) }).amountOut),
+          });
+          replay({ ...state, reserveX: actual.reserveXAfter, reserveY: actual.reserveYAfter,
+            feeAskX24: actual.feeAskX24After, feeBidX24: actual.feeBidX24After },
+          { ...cursors, [side]: cursors[side] + amount });
+        }
+      }
+    }
+    replay(snapshot, { xToY: 0n, yToX: 0n });
+    const gapBps = (promised, reference) => promised >= reference ? 0 :
+      Number(((reference - promised) * 10000n + reference - 1n) / reference);
+    assert.equal(result.constraintCount, constraints.size);
+    assert.equal(result.worstUnderquoteBps,
+      Math.max(...[...constraints.values()].map(({ promised, minimum }) => gapBps(promised, minimum))));
+    assert.equal(result.worstFreshSnapshotDiscountBps,
+      Math.max(...[...constraints.values()].map(({ promised, fresh }) => gapBps(promised, fresh))));
+    assert.equal(result.targetMet, result.worstUnderquoteBps === 0);
+  });
+
+  it("validates precision fields and fails closed when either work budget is exhausted", () => {
+    for (const maxLevels of [0, -1, 1.5, NaN, Infinity, 21]) {
+      assert.throws(() => buildPreciseOrderBook(snapshot, config, { ...precision, maxLevels }), /maxLevels/);
+    }
+    for (const targetUnderquoteBps of [-1, 0.5, NaN, Infinity, 10001]) {
+      assert.throws(() => buildPreciseOrderBook(snapshot, config, { ...precision, targetUnderquoteBps }), /targetUnderquoteBps/);
+    }
+    for (const maxWork of [0, -1, 1.5, NaN, Infinity, 5_000_001]) {
+      assert.throws(() => buildPreciseOrderBook(snapshot, config, { ...precision, maxWork }), /maxWork/);
+    }
+    assert.throws(() => buildPreciseOrderBook(snapshot, config, { ...precision, maxWork: 1 }), /budget/i);
+    assert.throws(() => buildPreciseOrderBook(snapshot, { ...config, maxTransitions: 1 }, precision), /budget/i);
+  });
+
+  it("never marks a paused or stale snapshot as meeting a precision target", () => {
+    for (const unavailable of [{ ...snapshot, paused: true }, { ...snapshot, maxExecutionBlock: "102" }]) {
+      const result = buildPreciseOrderBook(unavailable, config, precision);
+      assert.equal(result.targetMet, false);
+      assert.equal(result.validated.book.safety, OrderBookSafety.Indicative);
+      assert.deepEqual(result.validated.book.xToY.levels, []);
+      assert.equal(result.constraintCount, 0);
+    }
+  });
+});
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const vectorsDirectory =

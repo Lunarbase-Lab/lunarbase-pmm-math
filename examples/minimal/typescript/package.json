@@ -8,7 +8,7 @@
     "run": "tsx index.ts"
   },
   "dependencies": {
-    "@lunarbase-lab/pmm-math": "^0.4.0"
+    "@lunarbase-lab/pmm-math": "^0.4.1"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

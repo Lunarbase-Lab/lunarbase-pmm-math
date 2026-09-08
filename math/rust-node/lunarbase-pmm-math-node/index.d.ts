@@ -29,6 +29,164 @@ export interface QuoteResult {
   /** Saturating directional fee used by this quote before feeMultiplier. */
   effectiveFeeX24: number
 }
+export interface BuildOrderBookParams {
+  /** Operator anchor sqrt-price (Q64.96 uint160), decimal or 0x-prefixed hex. */
+  sqrtPriceX96: string
+  /** Current Y -> X fee in Q24. */
+  feeAskX24: number
+  /** Current X -> Y fee in Q24. */
+  feeBidX24: number
+  /** Active token-X reserve (uint112), decimal or hex. */
+  reserveX: string
+  /** Active token-Y reserve (uint112), decimal or hex. */
+  reserveY: string
+  /** Maximum immediate directional punishment in Q24. */
+  maxPunishmentX24: number
+  /** Resolved fee multiplier of the address that will call the Pool. */
+  feeMultiplier: string
+  /** Block number of the complete cached snapshot. */
+  snapshotBlock: string
+  /** Latest block in which the publisher will allow this ladder to execute. */
+  maxExecutionBlock: string
+  /** Block of the most recent operator update (uint48 on-chain). */
+  latestUpdateBlock: string
+  /** Operator-state freshness window (uint48 on-chain). */
+  blockDelay: string
+  /** Pause state from the same cached snapshot. */
+  paused: boolean
+  /** Cumulative raw token-X input sizes for X -> Y; empty disables the side. */
+  xToYSizes: Array<string>
+  /** Cumulative raw token-Y input sizes for Y -> X; empty disables the side. */
+  yToXSizes: Array<string>
+}
+/** Complete coherent snapshot for a policy-validated book. */
+export interface OrderBookSnapshot {
+  sqrtPriceX96: string
+  feeAskX24: number
+  feeBidX24: number
+  reserveX: string
+  reserveY: string
+  maxPunishmentX24: number
+  /** Fee multiplier of the exact adapter calling the Pool. */
+  feeMultiplier: string
+  snapshotBlock: string
+  /** Latest block covered by the signed lifetime. */
+  maxExecutionBlock: string
+  latestUpdateBlock: string
+  blockDelay: string
+  paused: boolean
+}
+/** Must match the on-chain adapter and signed directional cap exactly. */
+export interface FillPolicy {
+  minInput: string
+  lotInput: string
+  maxInput: string
+  totalInput: string
+}
+export interface ValidatedOrderBookConfig {
+  xToY?: FillPolicy
+  yToX?: FillPolicy
+  /** Integer in 1..=100000. Exhaustion throws; no partial certificate. */
+  maxTransitions: number
+}
+/** Coherent fee state for the exact adapter/router that calls the Pool. */
+export interface FeeAccountingState {
+  /** Partner share scaled by 1e6 (Pool FeeManager.BPS), not Q24. */
+  partnerFee: number
+  partnerOperatorPresent: boolean
+  treasuryX: string
+  treasuryY: string
+  partnerX: string
+  partnerY: string
+  routerPartnerX: string
+  routerPartnerY: string
+}
+export interface ValidatedOrderBookResult {
+  book: OrderBookResult
+  snapshot: OrderBookSnapshot
+  config: ValidatedOrderBookConfig
+  checkedStates: number
+  checkedTransitions: number
+}
+/** Controls conservative multilevel fitting after exhaustive lot-policy validation. */
+export interface OrderBookPrecision {
+  /** Maximum directional level count, an integer in 1..=20. */
+  maxLevels: number
+  /**
+   * Target maximum underquote against the WORST reachable state for the
+   * same cursor and amount. Integer basis points in 0..=10000.
+   */
+  targetUnderquoteBps: number
+  /**
+   * Separate bounded fitting-work budget, an integer in 1..=5000000.
+   * Exhaustion throws instead of returning an unchecked approximation.
+   */
+  maxWork: number
+}
+export interface PreciseOrderBookResult {
+  /** The same exhaustive policy certificate, now with a fitted multilevel book. */
+  validated: ValidatedOrderBookResult
+  precision: OrderBookPrecision
+  /**
+   * Measured result, not a promise that the requested tolerance is attainable.
+   * False for inactive snapshots or when the fitted book misses the target.
+   */
+  targetMet: boolean
+  /**
+   * Worst ceiling-rounded underquote in bps against the minimum Pool output
+   * over all reachable states for the same direction, cursor and fill size.
+   */
+  worstUnderquoteBps: number
+  /**
+   * Separate discount against the initial snapshot's same-size quote.
+   * This can exceed targetUnderquoteBps even when targetMet is true.
+   */
+  worstFreshSnapshotDiscountBps: number
+  workUsed: number
+  constraintCount: number
+}
+export enum OrderBookStatus {
+  Active = 'active',
+  Paused = 'paused',
+  Stale = 'stale'
+}
+export enum OrderBookSafety {
+  Indicative = 'indicative',
+  ExhaustiveLotPolicy = 'exhaustiveLotPolicy'
+}
+export interface OrderBookLevel {
+  /** Cumulative raw token-in size. */
+  size: string
+  /** Marginal raw token-out/token-in price scaled by 1e18. */
+  price: string
+}
+export interface DirectionalLadderResult {
+  levels: Array<OrderBookLevel>
+  truncated: boolean
+}
+export interface OrderBookResult {
+  /**
+   * Only active results may contain executable liquidity; also require a
+   * non-empty directional `levels` array before publishing that side.
+   */
+  status: OrderBookStatus
+  /**
+   * Mathematical coverage, independent of freshness. An exhaustive lot
+   * policy covers only its snapshot and modeled mixed-direction sequences.
+   */
+  safety: OrderBookSafety
+  /** Echo of the input snapshot block for version/coherence checks. */
+  snapshotBlock: string
+  /** Latest execution block covered by the freshness gate. */
+  maxExecutionBlock: string
+  /**
+   * True because arbitrary partial/cursor fills require an adapter-side
+   * Pool `amountOutMinimum` guard.
+   */
+  requiresAmountOutMinimum: boolean
+  xToY: DirectionalLadderResult
+  yToX: DirectionalLadderResult
+}
 export enum SwapSimulationStatus {
   Applied = 'applied',
   SwapImpossible = 'swapImpossible',
@@ -62,6 +220,27 @@ export declare function quoteXToY(params: QuoteParams): QuoteResult
 export declare function quoteYToX(params: QuoteParams): QuoteResult
 export declare function simulateXToY(params: QuoteParams): SwapSimulationResult
 export declare function simulateYToX(params: QuoteParams): SwapSimulationResult
+export declare function buildOrderBook(params: BuildOrderBookParams): OrderBookResult
+/**
+ * Certify the finite quote/reserve/punishment model, including mixed-direction
+ * fills. First call validateFeeAccountingCapacity on the same snapshot; this
+ * does not guarantee arbitrary ERC20 or EVM execution.
+ */
+export declare function buildValidatedOrderBook(snapshot: OrderBookSnapshot, config: ValidatedOrderBookConfig): ValidatedOrderBookResult
+/**
+ * Fit up to 20 conservative levels against every allowed cursor/interleaving
+ * constraint. targetUnderquoteBps references the worst admissible state, not
+ * an unconditional fresh-snapshot quote. Validate fee accounting separately.
+ */
+export declare function buildPreciseOrderBook(snapshot: OrderBookSnapshot, config: ValidatedOrderBookConfig, precision: OrderBookPrecision): PreciseOrderBookResult
+/**
+ * Throws if fees would be left uncredited or conservative uint112 bucket
+ * headroom cannot be established for the signed input caps.
+ */
+export declare function validateFeeAccountingCapacity(snapshot: OrderBookSnapshot, config: ValidatedOrderBookConfig, accounting: FeeAccountingState): void
+/** Exact per-tranche floor sum; null when the requested cursor/fill exceeds depth. */
+export declare function ladderAmountOut(levels: Array<OrderBookLevel>, amountIn: string, cursor?: string | undefined | null): string | null
+export declare function geometricSizes(cap: string, levels: number): Array<string>
 export declare function priceToSqrtPriceX96(price: number): string
 export declare function price_to_sqrt_price_x96(price: number): string
 export declare function sqrtPriceX96ToPrice(value: string): number
