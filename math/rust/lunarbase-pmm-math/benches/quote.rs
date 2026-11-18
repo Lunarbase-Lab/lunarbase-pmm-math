@@ -20,6 +20,10 @@ fn symmetric_pool() -> PoolParams {
         reserve_x: 1_000_000_000_000_000_000,
         reserve_y: 1_000_000_000_000_000_000,
         max_punishment_x24: Q24 / 1_000,
+        max_decay_multiplier_x24: 0,
+        current_block: 0,
+        latest_update_block: 0,
+        block_delay: 1,
     }
 }
 
@@ -32,6 +36,10 @@ fn asymmetric_pool() -> PoolParams {
         reserve_x: 750_000_000_000_000_000,
         reserve_y: 1_500_000_000_000_000_000,
         max_punishment_x24: Q24 / 1_000,
+        max_decay_multiplier_x24: 0,
+        current_block: 0,
+        latest_update_block: 0,
+        block_delay: 1,
     }
 }
 

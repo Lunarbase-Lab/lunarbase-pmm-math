@@ -21,6 +21,8 @@ const (
 	// MaxUint24 is the largest storable uint24. For fees and maximum
 	// punishment it is a sentinel representing conceptual Q24 (100%).
 	MaxUint24 uint32 = Q24Scale - 1
+	// MaxUint48 is the largest update block or freshness window.
+	MaxUint48 uint64 = (1 << 48) - 1
 )
 
 var (
@@ -70,6 +72,11 @@ type PoolParams struct {
 	ReserveX         *uint256.Int
 	ReserveY         *uint256.Int
 	MaxPunishmentX24 uint32
+	// MaxDecayMultiplierX24 is a uint64 Q24 multiplier; zero disables age scaling.
+	MaxDecayMultiplierX24 uint64
+	CurrentBlock          uint64
+	LatestUpdateBlock     uint64
+	BlockDelay            uint64
 }
 
 func validateMutablePoolParams(params *PoolParams) error {
@@ -91,7 +98,7 @@ type QuoteResult struct {
 	SqrtPriceNext *uint256.Int
 	Fee           *uint256.Int
 	// EffectiveFeeX24 is the saturating directional fee used by this quote
-	// before the caller multiplier. It remains informative for rejected quotes.
+	// before the age and caller multipliers. It remains informative for rejected quotes.
 	EffectiveFeeX24 uint32
 }
 
@@ -131,7 +138,21 @@ func ValidatePoolParams(params *PoolParams) error {
 	if err := validateUintWidth("ReserveY", params.ReserveY, 112); err != nil {
 		return err
 	}
+	if params.LatestUpdateBlock > MaxUint48 || params.BlockDelay == 0 || params.BlockDelay > MaxUint48 {
+		return fmt.Errorf("%w: latest update must fit uint48 and BlockDelay must be in [1, uint48.max]", ErrValueOutOfRange)
+	}
+	if params.CurrentBlock < params.LatestUpdateBlock {
+		return fmt.Errorf("%w: CurrentBlock precedes LatestUpdateBlock", ErrInvalidArgument)
+	}
+	if params.MaxDecayMultiplierX24 != 0 && params.MaxDecayMultiplierX24 < uint64(Q24Scale) {
+		return fmt.Errorf("%w: MaxDecayMultiplierX24 must be zero or at least Q24", ErrValueOutOfRange)
+	}
 	return validateUint24("MaxPunishmentX24", params.MaxPunishmentX24)
+}
+
+// IsFresh reports whether the current block is within the inclusive update window.
+func (params *PoolParams) IsFresh() bool {
+	return params.CurrentBlock >= params.LatestUpdateBlock && params.CurrentBlock-params.LatestUpdateBlock <= params.BlockDelay
 }
 
 func validateUintWidth(name string, value *uint256.Int, bits int) error {
@@ -324,6 +345,11 @@ func quoteXToYWithMultiplierIntoChecked(
 	if err := validateQuoteCall(out, params, dx, feeMultiplier); err != nil {
 		return 0, 0, err
 	}
+	if !params.IsFresh() {
+		out.EffectiveFeeX24 = params.FeeBidX24
+		writeRejected(out, params.SqrtPriceX96)
+		return 0, params.FeeBidX24, nil
+	}
 	defer func() {
 		if err != nil {
 			resetQuoteResult(out)
@@ -347,7 +373,11 @@ func quoteXToYWithMultiplierIntoChecked(
 		writeRejected(out, params.SqrtPriceX96)
 		return desiredPunishmentX24, effectiveFeeX24, nil
 	}
-	if err := applyFeeInto(&amountOut, &fee, &grossOutput, effectiveFeeX24, feeMultiplier); err != nil {
+	agedFeeX24, err := DecayFeeX24(effectiveFeeX24, params.MaxDecayMultiplierX24, params.CurrentBlock-params.LatestUpdateBlock, params.BlockDelay)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := applyFeeInto(&amountOut, &fee, &grossOutput, agedFeeX24, feeMultiplier); err != nil {
 		return 0, 0, err
 	}
 	writeQuote(out, &amountOut, params.SqrtPriceX96, &fee)
@@ -368,6 +398,11 @@ func quoteYToXWithMultiplierIntoChecked(
 ) (desiredPunishmentX24, effectiveFeeX24 uint32, err error) {
 	if err := validateQuoteCall(out, params, dy, feeMultiplier); err != nil {
 		return 0, 0, err
+	}
+	if !params.IsFresh() {
+		out.EffectiveFeeX24 = params.FeeAskX24
+		writeRejected(out, params.SqrtPriceX96)
+		return 0, params.FeeAskX24, nil
 	}
 	defer func() {
 		if err != nil {
@@ -396,7 +431,11 @@ func quoteYToXWithMultiplierIntoChecked(
 		writeRejected(out, params.SqrtPriceX96)
 		return desiredPunishmentX24, effectiveFeeX24, nil
 	}
-	if err := applyFeeInto(&amountOut, &fee, &grossOutput, effectiveFeeX24, feeMultiplier); err != nil {
+	agedFeeX24, err := DecayFeeX24(effectiveFeeX24, params.MaxDecayMultiplierX24, params.CurrentBlock-params.LatestUpdateBlock, params.BlockDelay)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := applyFeeInto(&amountOut, &fee, &grossOutput, agedFeeX24, feeMultiplier); err != nil {
 		return 0, 0, err
 	}
 	writeQuote(out, &amountOut, params.SqrtPriceX96, &fee)

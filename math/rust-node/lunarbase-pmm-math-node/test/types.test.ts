@@ -36,7 +36,7 @@ void firstPrice;
 declare const snapshot: OrderBookSnapshot;
 declare const policy: ValidatedOrderBookConfig;
 declare const accounting: FeeAccountingState;
-validateFeeAccountingCapacity(snapshot, policy, accounting);
+validateFeeAccountingCapacity({ ...snapshot, feeAccounting: accounting }, policy);
 const validated: ValidatedOrderBookResult = buildValidatedOrderBook(snapshot, policy);
 const certified: boolean = validated.book.safety === OrderBookSafety.ExhaustiveLotPolicy;
 const swept: string | null = ladderAmountOut(validated.book.xToY.levels, "10", "20");

@@ -8,6 +8,7 @@ import (
 
 func symmetricPool() *PoolParams {
 	return &PoolParams{
+		BlockDelay:       1,
 		SqrtPriceX96:     new(uint256.Int).Set(q96), // price = 1.0
 		FeeAskX24:        Q24Scale / 1_000,          // 0.10%
 		FeeBidX24:        Q24Scale / 1_000,          // 0.10%
@@ -23,6 +24,7 @@ func asymmetricPool() *PoolParams {
 	p.Mul(p, uint256.NewInt(3))
 	p.Rsh(p, 1) // divide by 2
 	return &PoolParams{
+		BlockDelay:       1,
 		SqrtPriceX96:     p,
 		FeeAskX24:        Q24Scale / 100, // 1.00%
 		FeeBidX24:        Q24Scale / 333, // ~0.30%

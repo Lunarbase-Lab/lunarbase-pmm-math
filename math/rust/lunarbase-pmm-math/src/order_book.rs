@@ -28,29 +28,23 @@ pub const PRICE_SCALE_X18: U256 = U256::from_limbs([1_000_000_000_000_000_000u64
 /// Maximum number of levels accepted per directional ladder by this library.
 pub const MAX_ORDER_BOOK_LEVELS: usize = 20;
 
-const MAX_U48: u64 = (1u64 << 48) - 1;
-
 /// Pool and caller state required for snapshot freshness and the directional
-/// quote/reserve/punishment model. This excludes fee-accounting buckets and
-/// token-call behavior, which must be checked separately for settlement.
+/// quote/reserve/punishment model, including the router fee context. Fee-bucket
+/// capacity and token-call behavior must still be checked before settlement.
 ///
 /// `fee_multiplier` must belong to the address that will call the Pool (for
 /// example the external settlement adapter), not the taker or recipient.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct OrderBookState {
+    /// Fee buckets and partner configuration of the exact execution router.
+    pub fee_accounting: crate::FeeAccountingState,
     /// Quote-critical Pool storage from the same snapshot.
     pub pool: PoolParams,
     /// Effective caller-specific fee multiplier (`1` for a whitelisted caller).
     pub fee_multiplier: U256,
-    /// Block number identifying the complete cached snapshot.
-    pub snapshot_block: u64,
     /// Latest block in which the publisher will allow this ladder to execute.
     /// It must cover the signed quote lifetime, not only the next block.
     pub max_execution_block: u64,
-    /// Block in which the operator most recently called `upd`.
-    pub latest_update_block: u64,
-    /// Number of blocks for which the operator state remains fresh.
-    pub block_delay: u64,
     /// Current OpenZeppelin pause state from the same snapshot.
     pub paused: bool,
 }
@@ -59,24 +53,16 @@ impl OrderBookState {
     /// Validate Solidity widths and cache-coherence invariants.
     pub fn validate(&self) -> Result<(), OrderBookError> {
         self.pool.validate().map_err(OrderBookError::Math)?;
-        if self.latest_update_block > MAX_U48 {
-            return Err(OrderBookError::LatestUpdateBlockExceedsUint48);
-        }
-        if self.block_delay == 0 {
-            return Err(OrderBookError::BlockDelayIsZero);
-        }
-        if self.block_delay > MAX_U48 {
-            return Err(OrderBookError::BlockDelayExceedsUint48);
+        if self.fee_accounting.partner_fee > crate::PARTNER_FEE_SCALE {
+            return Err(OrderBookError::Math(MathError::InvalidPartnerFee));
         }
         if self.fee_multiplier.is_zero() {
             return Err(OrderBookError::FeeMultiplierIsZero);
         }
-        if self.max_execution_block < self.snapshot_block {
+        if self.max_execution_block < self.pool.current_block {
             return Err(OrderBookError::ValidityPrecedesSnapshot);
         }
-        if self.snapshot_block < self.latest_update_block {
-            return Err(OrderBookError::SnapshotPrecedesLatestUpdate);
-        }
+
         Ok(())
     }
 
@@ -86,8 +72,8 @@ impl OrderBookState {
         if self.paused {
             return Ok(OrderBookStatus::Paused);
         }
-        let stale_at = self.latest_update_block + self.block_delay;
-        if self.max_execution_block >= stale_at {
+        let stale_at = self.pool.latest_update_block + self.pool.block_delay;
+        if self.max_execution_block > stale_at {
             return Ok(OrderBookStatus::Stale);
         }
         Ok(OrderBookStatus::Active)
@@ -114,7 +100,7 @@ pub enum OrderBookStatus {
     Active,
     /// Swaps are paused; both returned ladders are empty.
     Paused,
-    /// `max_execution_block >= latest_update_block + block_delay`; both ladders are
+    /// `max_execution_block > latest_update_block + block_delay`; both ladders are
     /// empty.
     Stale,
 }
@@ -406,7 +392,7 @@ pub fn try_build_order_book(
         return Ok(OrderBook {
             status,
             safety: OrderBookSafety::Indicative,
-            snapshot_block: state.snapshot_block,
+            snapshot_block: state.pool.current_block,
             max_execution_block: state.max_execution_block,
             requires_amount_out_minimum: true,
             x_to_y: DirectionalLadder::default(),
@@ -414,20 +400,25 @@ pub fn try_build_order_book(
         });
     }
 
+    let execution_pool = PoolParams {
+        current_block: state.max_execution_block,
+        ..state.pool
+    };
+
     Ok(OrderBook {
         status,
         safety: OrderBookSafety::Indicative,
-        snapshot_block: state.snapshot_block,
+        snapshot_block: state.pool.current_block,
         max_execution_block: state.max_execution_block,
         requires_amount_out_minimum: true,
         x_to_y: try_build_directional_ladder(
-            &state.pool,
+            &execution_pool,
             Direction::XToY,
             state.fee_multiplier,
             config.x_to_y_sizes,
         )?,
         y_to_x: try_build_directional_ladder(
-            &state.pool,
+            &execution_pool,
             Direction::YToX,
             state.fee_multiplier,
             config.y_to_x_sizes,
@@ -519,6 +510,7 @@ mod tests {
 
     fn active_state() -> OrderBookState {
         OrderBookState {
+            fee_accounting: crate::FeeAccountingState::default(),
             pool: PoolParams {
                 sqrt_price_x96: Q96,
                 fee_ask_x24: 0,
@@ -526,12 +518,13 @@ mod tests {
                 reserve_x: 1_000_000,
                 reserve_y: 1_000_000,
                 max_punishment_x24: 0,
+                max_decay_multiplier_x24: 0,
+                current_block: 100,
+                latest_update_block: 99,
+                block_delay: 3,
             },
             fee_multiplier: U256::from(1u64),
-            snapshot_block: 100,
             max_execution_block: 101,
-            latest_update_block: 99,
-            block_delay: 3,
             paused: false,
         }
     }
@@ -657,7 +650,7 @@ mod tests {
         assert!(paused_book.y_to_x.levels.is_empty());
 
         let mut stale = active_state();
-        stale.max_execution_block = 102;
+        stale.max_execution_block = 103;
         let stale_book = try_build_order_book(&stale, &config).unwrap();
         assert_eq!(stale_book.status, OrderBookStatus::Stale);
         assert!(stale_book.x_to_y.levels.is_empty());
@@ -720,7 +713,7 @@ mod tests {
         ));
 
         let mut incoherent = active_state();
-        incoherent.latest_update_block = incoherent.snapshot_block + 1;
+        incoherent.pool.latest_update_block = incoherent.pool.current_block + 1;
         assert_eq!(
             try_build_order_book(
                 &incoherent,
@@ -729,11 +722,11 @@ mod tests {
                     y_to_x_sizes: &[],
                 }
             ),
-            Err(OrderBookError::SnapshotPrecedesLatestUpdate)
+            Err(OrderBookError::Math(MathError::CurrentBlockPrecedesUpdate))
         );
 
         let mut impossible_validity = active_state();
-        impossible_validity.max_execution_block = impossible_validity.snapshot_block - 1;
+        impossible_validity.max_execution_block = impossible_validity.pool.current_block - 1;
         assert_eq!(
             try_build_order_book(
                 &impossible_validity,

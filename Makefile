@@ -209,10 +209,10 @@ go-cross-all: \
 # packaging errors early.
 
 publish-crates-dry:
-	$(CARGO) publish -p lunarbase-pmm-math --dry-run --allow-dirty
+	$(CARGO) publish -p lunarbase-pmm-math --dry-run --locked --allow-dirty
 
 publish-npm-dry:
-	cd $(NODE_DIR) && npm install --ignore-scripts
+	cd $(NODE_DIR) && npm ci --ignore-scripts --omit=optional
 	cd $(NODE_DIR) && npm run build
 	cd $(NODE_DIR) && npm pack --dry-run
 
@@ -227,7 +227,7 @@ publish-dry-run: publish-crates-dry publish-npm-dry
 # Convenience target that bumps the npm package version, prints the next steps,
 # and exits without pushing anything. Use VERSION=X.Y.Z.
 release-tag:
-	@if [ -z "$(VERSION)" ]; then echo "usage: make release-tag VERSION=0.4.1"; exit 1; fi
+	@if [ -z "$(VERSION)" ]; then echo "usage: make release-tag VERSION=0.5.0"; exit 1; fi
 	@echo "  →  reminder: bump Cargo.toml [workspace.package].version to $(VERSION)"
 	@echo "  →  reminder: bump $(NODE_DIR)/package.json .version and .optionalDependencies"
 	@echo "  →  then: git tag v$(VERSION) && git tag math/go/v$(VERSION)"

@@ -16,6 +16,14 @@ export interface QuoteParams {
   reserveY: string
   /** Maximum immediate directional punishment in Q24. Defaults to disabled. */
   maxPunishmentX24?: number
+  /** Maximum cubic price-age multiplier (uint64 Q24), decimal or hex. */
+  maxDecayMultiplierX24: string
+  /** Block at which to evaluate the quote (uint64), decimal or hex. */
+  currentBlock: string
+  /** Latest operator update block (uint48), decimal or hex. */
+  latestUpdateBlock: string
+  /** Inclusive nonzero freshness window (uint48), decimal or hex. */
+  blockDelay: string
   /** Exact input amount (uint256), decimal or hex. */
   amountIn: string
   /** Caller-specific fee multiplier (uint256). Defaults to one. */
@@ -26,7 +34,7 @@ export interface QuoteResult {
   /** Always equals the operator anchor in the linear implementation. */
   sqrtPriceNext: string
   fee: string
-  /** Saturating directional fee used by this quote before feeMultiplier. */
+  /** Persisted directional fee before the price-age and caller multipliers. */
   effectiveFeeX24: number
 }
 export interface BuildOrderBookParams {
@@ -42,6 +50,8 @@ export interface BuildOrderBookParams {
   reserveY: string
   /** Maximum immediate directional punishment in Q24. */
   maxPunishmentX24: number
+  /** Maximum cubic price-age multiplier (uint64 Q24), decimal or hex. */
+  maxDecayMultiplierX24: string
   /** Resolved fee multiplier of the address that will call the Pool. */
   feeMultiplier: string
   /** Block number of the complete cached snapshot. */
@@ -61,12 +71,16 @@ export interface BuildOrderBookParams {
 }
 /** Complete coherent snapshot for a policy-validated book. */
 export interface OrderBookSnapshot {
+  /** Router fee state from this snapshot; omitted means zero partner share and empty buckets. */
+  feeAccounting?: FeeAccountingState
   sqrtPriceX96: string
   feeAskX24: number
   feeBidX24: number
   reserveX: string
   reserveY: string
   maxPunishmentX24: number
+  /** Maximum cubic price-age multiplier (uint64 Q24), decimal or hex. */
+  maxDecayMultiplierX24: string
   /** Fee multiplier of the exact adapter calling the Pool. */
   feeMultiplier: string
   snapshotBlock: string
@@ -188,6 +202,7 @@ export interface OrderBookResult {
   yToX: DirectionalLadderResult
 }
 export enum SwapSimulationStatus {
+  StalePrice = 'stalePrice',
   Applied = 'applied',
   SwapImpossible = 'swapImpossible',
   ReserveTransitionOverflow = 'reserveTransitionOverflow',
@@ -197,7 +212,7 @@ export interface SwapSimulationResult {
   amountOut: string
   sqrtPriceNext: string
   fee: string
-  /** Saturating directional fee used by the current quote before multiplier. */
+  /** Saturating directional fee used by the current quote before age and caller multipliers. */
   effectiveFeeX24: number
   /**
    * True when the pure-math quote is nonzero and the standard-token uint112
@@ -218,8 +233,8 @@ export interface SwapSimulationResult {
 }
 export declare function quoteXToY(params: QuoteParams): QuoteResult
 export declare function quoteYToX(params: QuoteParams): QuoteResult
-export declare function simulateXToY(params: QuoteParams): SwapSimulationResult
-export declare function simulateYToX(params: QuoteParams): SwapSimulationResult
+export declare function simulateXToY(params: QuoteParams, accounting?: FeeAccountingState | undefined | null): SwapSimulationResult
+export declare function simulateYToX(params: QuoteParams, accounting?: FeeAccountingState | undefined | null): SwapSimulationResult
 export declare function buildOrderBook(params: BuildOrderBookParams): OrderBookResult
 /**
  * Certify the finite quote/reserve/punishment model, including mixed-direction
@@ -233,11 +248,8 @@ export declare function buildValidatedOrderBook(snapshot: OrderBookSnapshot, con
  * an unconditional fresh-snapshot quote. Validate fee accounting separately.
  */
 export declare function buildPreciseOrderBook(snapshot: OrderBookSnapshot, config: ValidatedOrderBookConfig, precision: OrderBookPrecision): PreciseOrderBookResult
-/**
- * Throws if fees would be left uncredited or conservative uint112 bucket
- * headroom cannot be established for the signed input caps.
- */
-export declare function validateFeeAccountingCapacity(snapshot: OrderBookSnapshot, config: ValidatedOrderBookConfig, accounting: FeeAccountingState): void
+/** Check uint112 fee headroom using the feeAccounting embedded in this snapshot. */
+export declare function validateFeeAccountingCapacity(snapshot: OrderBookSnapshot, config: ValidatedOrderBookConfig): void
 /** Exact per-tranche floor sum; null when the requested cursor/fill exceeds depth. */
 export declare function ladderAmountOut(levels: Array<OrderBookLevel>, amountIn: string, cursor?: string | undefined | null): string | null
 export declare function geometricSizes(cap: string, levels: number): Array<string>

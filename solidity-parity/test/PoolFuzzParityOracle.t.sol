@@ -4,7 +4,7 @@ pragma solidity 0.8.31;
 import {SafeCast} from "@openzeppelin/contracts/utils/math/SafeCast.sol";
 import {PoolVectorOracle} from "./utils/PoolVectorOracle.sol";
 
-/// @title Seeded JSONL v4 oracle for quote and punishment differential testing.
+/// @title Seeded JSONL v5 oracle for quote and punishment differential testing.
 /// @dev Run single-threaded because every fuzz run appends two rows to one file.
 contract PoolFuzzParityOracle is PoolVectorOracle {
     using SafeCast for uint256;
@@ -53,6 +53,9 @@ contract PoolFuzzParityOracle is PoolVectorOracle {
             feeMultiplier,
             1 + (outputReserve / 16)
         );
+
+        input.maxDecayMultiplierX24 = r3 % 7 == 0 ? type(uint64).max : uint64(Q24 * (1 + r3 % 5));
+        input.age = uint48(r2 % 12);
 
         uint256 mode = r0 % 12;
         if (mode == 0) {
@@ -161,6 +164,9 @@ contract PoolFuzzParityOracle is PoolVectorOracle {
             reserveX: reserveX,
             reserveY: reserveY,
             maxPunishmentX24: maxPunishmentX24,
+            maxDecayMultiplierX24: uint64(Q24),
+            age: 0,
+            blockDelay: 10,
             feeMultiplier: feeMultiplier,
             amountIn: amountIn
         });

@@ -3,7 +3,7 @@ pragma solidity 0.8.31;
 
 import {PoolVectorOracle} from "./utils/PoolVectorOracle.sol";
 
-/// @title Canonical deterministic JSONL v4 oracle for Pool quotes and punishment transitions.
+/// @title Canonical deterministic JSONL v6 oracle for Pool quotes and punishment transitions.
 contract PoolDeterministicParityOracle is PoolVectorOracle {
     string internal constant VECTORS_DIR = "generated";
     string internal constant VECTORS_PATH = "generated/deterministic_vectors.jsonl";
@@ -100,7 +100,7 @@ contract PoolDeterministicParityOracle is PoolVectorOracle {
             _vector(false, 1, 0, 0, type(uint112).max, type(uint112).max, FULL_FEE_X24, 1, type(uint256).max)
         );
 
-        // A half-inventory swap applies an immediate 50% punishment, then a
+        // A half-inventory swap applies an immediate 12.5% punishment, then a
         // real Pool.upd replaces both effective fees without changing reserves
         // or max punishment.
         _writeNamedUpdate(
@@ -134,6 +134,33 @@ contract PoolDeterministicParityOracle is PoolVectorOracle {
 
         _writeSplitSequence();
         _writeFullMaxSplitSequence();
+        _writeNamed("q48_before_cube_x", _vector(true, Q96, 0, 0, 0, 3, 27, 1, 1));
+        _writeNamed("q48_before_cube_y", _vector(false, Q96, 0, 0, 3, 0, 27, 1, 1));
+        _writeAgeVectors();
+    }
+
+    function _writeAgeVectors() private {
+        uint48[6] memory ages = [uint48(0), 1, 5, 9, 10, 11];
+        for (uint256 directionIndex; directionIndex < 2; ++directionIndex) {
+            bool xToY = directionIndex == 0;
+            VectorInput memory input = _vector(xToY, Q96, 10_000, 10_000, 100_000_000, 100_000_000, 0, 1, Q24);
+            input.maxDecayMultiplierX24 = uint64(3 * Q24);
+            for (uint256 ageIndex; ageIndex < ages.length; ++ageIndex) {
+                input.age = ages[ageIndex];
+                _writeNamed(string.concat("age_", xToY ? "x_" : "y_", vm.toString(input.age)), input);
+            }
+            input.age = 5;
+            input.feeAskX24 = 10_001;
+            input.feeBidX24 = 10_001;
+            _writeNamed(xToY ? "age_ceil_x" : "age_ceil_y", input);
+            input.maxDecayMultiplierX24 = type(uint64).max;
+            _writeNamed(xToY ? "age_saturation_x" : "age_saturation_y", input);
+            input.blockDelay = type(uint48).max;
+            input.age = 1;
+            _writeNamed(xToY ? "age_wide_delay_dust_x" : "age_wide_delay_dust_y", input);
+            input.age = type(uint48).max;
+            _writeNamed(xToY ? "age_wide_delay_end_x" : "age_wide_delay_end_y", input);
+        }
     }
 
     function _writeNamed(string memory name, VectorInput memory input) private returns (VectorOutput memory output) {
@@ -172,12 +199,8 @@ contract PoolDeterministicParityOracle is PoolVectorOracle {
 
         assertLt(splitTotalFees, single.feeAmount, "split sequence did not reduce integrated fee");
         assertGt(splitTotalAmountOut, single.amountOut, "split sequence did not increase output");
-        assertGe(finalSplitBidX24, single.feeBidX24After, "split sequence ended below single fee state");
-        assertLe(
-            uint256(finalSplitBidX24) - uint256(single.feeBidX24After),
-            splitCount - 1,
-            "split state exceeded per-call ceil tolerance"
-        );
+        assertLt(finalSplitBidX24, single.feeBidX24After, "cubic split should accumulate less punishment");
+        assertEq(finalSplitBidX24, 3_664, "unexpected cubic split fee state");
     }
 
     function _writeFullMaxSplitSequence() private {
@@ -189,8 +212,8 @@ contract PoolDeterministicParityOracle is PoolVectorOracle {
             _vector(true, Q96, 0, 0, sideReserve, sideReserve, FULL_FEE_X24, 1, amountPerSwap * splitCount);
         VectorOutput memory single = _writeNamed("full_max_split_single", base);
         require(single.outcome == VectorOutcome.Applied, "full-max single must apply");
-        assertEq(single.amountOut, 500_000 ether, "unexpected full-max single output");
-        assertEq(single.feeBidX24After, 8_388_608, "unexpected full-max single fee state");
+        assertEq(single.amountOut, 875_000 ether, "unexpected full-max single output");
+        assertEq(single.feeBidX24After, 2_097_152, "unexpected full-max single fee state");
 
         base.amountIn = amountPerSwap;
         uint256 splitTotalAmountOut;
@@ -207,8 +230,8 @@ contract PoolDeterministicParityOracle is PoolVectorOracle {
             base.reserveY = step.reserveYAfter;
         }
 
-        assertEq(splitTotalAmountOut, 724_999_934_434_890_747_070_315, "unexpected full-max split output");
-        assertEq(finalSplitBidX24, 8_388_610, "unexpected full-max split fee state");
+        assertEq(splitTotalAmountOut, 999_312_406_778_335_571_289_065, "unexpected full-max split output");
+        assertEq(finalSplitBidX24, 20_971, "unexpected full-max split fee state");
         assertGt(splitTotalAmountOut, single.amountOut, "full-max split did not increase output");
     }
 
@@ -241,6 +264,9 @@ contract PoolDeterministicParityOracle is PoolVectorOracle {
             reserveX: reserveX,
             reserveY: reserveY,
             maxPunishmentX24: maxPunishmentX24,
+            maxDecayMultiplierX24: uint64(Q24),
+            age: 0,
+            blockDelay: 10,
             feeMultiplier: feeMultiplier,
             amountIn: amountIn
         });

@@ -14,6 +14,8 @@ use crate::uint256::{U256Ext, U256};
 pub const Q24: u32 = 1u32 << 24;
 /// Largest value representable by Solidity `uint24`.
 pub const MAX_U24: u32 = Q24 - 1;
+/// Largest value representable by Solidity `uint48`.
+pub const MAX_U48: u64 = (1u64 << 48) - 1;
 /// Largest value representable by Solidity `uint112`.
 pub const MAX_U112: u128 = (1u128 << 112) - 1;
 /// On-chain maximum-punishment sentinel.
@@ -58,6 +60,18 @@ pub enum MathError {
     MulDivOverflow,
     /// A `uint256` addition overflowed.
     ArithmeticOverflow,
+    /// Latest update block exceeds Solidity `uint48`.
+    LatestUpdateBlockExceedsUint48,
+    /// Freshness window is zero or exceeds Solidity `uint48`.
+    InvalidBlockDelay,
+    /// Current block precedes the operator update.
+    CurrentBlockPrecedesUpdate,
+    /// Maximum age multiplier is neither zero nor at least Q24.
+    InvalidDecayMultiplier,
+    /// A standalone age is outside the inclusive freshness window.
+    InvalidPriceAge,
+    /// Partner fee exceeds the protocol 1e6 denominator.
+    InvalidPartnerFee,
 }
 
 impl fmt::Display for MathError {
@@ -74,6 +88,12 @@ impl fmt::Display for MathError {
             Self::DivisionByZero => "division by zero",
             Self::MulDivOverflow => "mulDiv result exceeds uint256",
             Self::ArithmeticOverflow => "uint256 arithmetic overflow",
+            Self::LatestUpdateBlockExceedsUint48 => "latest_update_block exceeds uint48",
+            Self::InvalidBlockDelay => "block_delay must be in [1, uint48::MAX]",
+            Self::CurrentBlockPrecedesUpdate => "current_block precedes latest_update_block",
+            Self::InvalidDecayMultiplier => "max_decay_multiplier_x24 must be zero or at least Q24",
+            Self::InvalidPriceAge => "price age exceeds block_delay",
+            Self::InvalidPartnerFee => "partner_fee exceeds 1e6",
         })
     }
 }
@@ -99,6 +119,14 @@ pub struct PoolParams {
     /// Maximum directional punishment in Q24. `uint24::MAX` is the 100%
     /// sentinel; zero disables punishment.
     pub max_punishment_x24: u32,
+    /// Maximum cubic price-age multiplier in Q24 (`uint64`). Zero is the legacy disabled value.
+    pub max_decay_multiplier_x24: u64,
+    /// Block at which this snapshot is quoted or simulated.
+    pub current_block: u64,
+    /// Block of the latest operator update (`uint48`).
+    pub latest_update_block: u64,
+    /// Inclusive freshness window (`uint48`, nonzero).
+    pub block_delay: u64,
 }
 
 impl PoolParams {
@@ -122,7 +150,27 @@ impl PoolParams {
         if self.max_punishment_x24 > MAX_U24 {
             return Err(MathError::MaxPunishmentExceedsUint24);
         }
+        if self.latest_update_block > MAX_U48 {
+            return Err(MathError::LatestUpdateBlockExceedsUint48);
+        }
+        if self.block_delay == 0 || self.block_delay > MAX_U48 {
+            return Err(MathError::InvalidBlockDelay);
+        }
+        if self.current_block < self.latest_update_block {
+            return Err(MathError::CurrentBlockPrecedesUpdate);
+        }
+        if self.max_decay_multiplier_x24 != 0 && self.max_decay_multiplier_x24 < u64::from(Q24) {
+            return Err(MathError::InvalidDecayMultiplier);
+        }
         Ok(())
+    }
+
+    /// Whether the snapshot is within the inclusive operator freshness window.
+    #[must_use]
+    pub fn is_fresh(&self) -> bool {
+        self.current_block
+            .checked_sub(self.latest_update_block)
+            .is_some_and(|age| age <= self.block_delay)
     }
 }
 
@@ -135,15 +183,14 @@ pub struct QuoteResult {
     pub sqrt_price_next: U256,
     /// Fee charged in the output token.
     pub fee: U256,
-    /// Saturating directional fee used by this quote before the caller
-    /// multiplier. This is counterfactual when the surrounding swap reverts.
+    /// Saturating directional fee before the age and caller multipliers. This is counterfactual when the surrounding swap reverts.
     pub effective_fee_x24: u32,
 }
 
 /// Attempted directional punishment transition.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PunishmentTransition {
-    /// Increment requested by the wealth-ratio formula.
+    /// Increment requested by the cubic Q48 wealth-ratio formula.
     pub desired_punishment_x24: u32,
     /// Increment actually applied after saturating against the current fee.
     pub applied_punishment_x24: u32,
@@ -156,6 +203,8 @@ pub struct PunishmentTransition {
 /// Why a simulated Solidity swap reverted and rolled all state back.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RollbackReason {
+    /// The operator price is past its inclusive freshness window.
+    StalePrice,
     /// The quote returned zero output, matching `SwapImpossible`.
     SwapImpossible,
     /// Post-transfer active reserves would not fit in `uint112`.
@@ -337,6 +386,37 @@ pub fn apply_fee(gross_output: U256, fee_q24: u32, fee_multiplier: U256) -> (U25
     try_apply_fee(gross_output, fee_q24, fee_multiplier).expect("Solidity applyFee reverted")
 }
 
+/// Apply the cubic price-age multiplier with the contract's additional-fee ceil.
+/// Zero maximum is the disabled legacy configuration. Age must be fresh.
+pub fn try_decay_fee_x24(
+    fee_x24: u32,
+    maximum_multiplier_x24: u64,
+    age: u64,
+    block_delay: u64,
+) -> Result<u32, MathError> {
+    if fee_x24 > MAX_U24 {
+        return Err(MathError::FeeExceedsUint24);
+    }
+    if block_delay == 0 || block_delay > MAX_U48 {
+        return Err(MathError::InvalidBlockDelay);
+    }
+    if age > block_delay {
+        return Err(MathError::InvalidPriceAge);
+    }
+    if maximum_multiplier_x24 <= u64::from(Q24) || fee_x24 == 0 || age == 0 || fee_x24 == MAX_U24 {
+        return Ok(fee_x24);
+    }
+    let age_value = U256::from(age);
+    let delay_value = U256::from(block_delay);
+    let additional_fee = try_mul_div_ceil(
+        U256::from(fee_x24) * U256::from(maximum_multiplier_x24 - u64::from(Q24)),
+        age_value * age_value * age_value,
+        U256::from(Q24) * delay_value * delay_value * delay_value,
+    )?;
+    let aged_fee = U256::from(fee_x24) + additional_fee;
+    Ok(aged_fee.min(U256::from(MAX_U24)).to::<u32>())
+}
+
 fn zero_quote(sqrt_price_x96: U256, effective_fee_x24: u32) -> QuoteResult {
     QuoteResult {
         amount_out: U256::ZERO,
@@ -363,12 +443,21 @@ pub fn try_quote_x_to_y_with_multiplier(
     fee_multiplier: U256,
 ) -> Result<QuoteResult, MathError> {
     params.validate()?;
+    if !params.is_fresh() {
+        return Ok(zero_quote(params.sqrt_price_x96, params.fee_bid_x24));
+    }
     let punishment = try_punishment_transition(params, dx, Direction::XToY)?;
     let gross_output = try_x_value_in_y(dx, params.sqrt_price_x96)?;
     if gross_output.is_zero() || gross_output > U256::from(params.reserve_y) {
         return Ok(zero_quote(params.sqrt_price_x96, punishment.fee_bid_x24));
     }
-    let (amount_out, fee) = try_apply_fee(gross_output, punishment.fee_bid_x24, fee_multiplier)?;
+    let aged_fee = try_decay_fee_x24(
+        punishment.fee_bid_x24,
+        params.max_decay_multiplier_x24,
+        params.current_block - params.latest_update_block,
+        params.block_delay,
+    )?;
+    let (amount_out, fee) = try_apply_fee(gross_output, aged_fee, fee_multiplier)?;
     Ok(QuoteResult {
         amount_out,
         sqrt_price_next: params.sqrt_price_x96,
@@ -384,6 +473,9 @@ pub fn try_quote_y_to_x_with_multiplier(
     fee_multiplier: U256,
 ) -> Result<QuoteResult, MathError> {
     params.validate()?;
+    if !params.is_fresh() {
+        return Ok(zero_quote(params.sqrt_price_x96, params.fee_ask_x24));
+    }
     let punishment = try_punishment_transition(params, dy, Direction::YToX)?;
     if params.sqrt_price_x96.is_zero() {
         return Ok(zero_quote(params.sqrt_price_x96, punishment.fee_ask_x24));
@@ -393,7 +485,13 @@ pub fn try_quote_y_to_x_with_multiplier(
     if gross_output.is_zero() || gross_output > U256::from(params.reserve_x) {
         return Ok(zero_quote(params.sqrt_price_x96, punishment.fee_ask_x24));
     }
-    let (amount_out, fee) = try_apply_fee(gross_output, punishment.fee_ask_x24, fee_multiplier)?;
+    let aged_fee = try_decay_fee_x24(
+        punishment.fee_ask_x24,
+        params.max_decay_multiplier_x24,
+        params.current_block - params.latest_update_block,
+        params.block_delay,
+    )?;
+    let (amount_out, fee) = try_apply_fee(gross_output, aged_fee, fee_multiplier)?;
     Ok(QuoteResult {
         amount_out,
         sqrt_price_next: params.sqrt_price_x96,
@@ -441,7 +539,7 @@ pub fn quote_y_to_x_with_multiplier(
 /// Compute the desired punishment increment included in the current quote.
 ///
 /// Reserves are the pre-swap active reserves. The `uint24::MAX` maximum is
-/// expanded to conceptual Q24 before the single rounded-up ratio operation.
+/// expanded to conceptual Q24; ceil the wealth ratio to Q48, cube, then ceil the Q24 result.
 pub fn try_punishment_x24(
     params: &PoolParams,
     amount_in: U256,
@@ -474,7 +572,12 @@ pub fn try_punishment_x24(
     let calculated = if swap_wealth >= inventory_wealth {
         maximum
     } else {
-        try_mul_div_ceil(maximum, swap_wealth, inventory_wealth)?
+        let ratio_x48 = try_mul_div_ceil(swap_wealth, U256::from(1u64) << 48, inventory_wealth)?;
+        try_mul_div_ceil(
+            maximum,
+            ratio_x48 * ratio_x48 * ratio_x48,
+            U256::from(1u64) << 144,
+        )?
     };
     if calculated >= U256::from(Q24) {
         return Ok(MAX_U24);
@@ -559,6 +662,10 @@ pub fn try_apply_update(
         reserve_x: params.reserve_x,
         reserve_y: params.reserve_y,
         max_punishment_x24: params.max_punishment_x24,
+        max_decay_multiplier_x24: params.max_decay_multiplier_x24,
+        current_block: params.current_block,
+        latest_update_block: params.current_block & MAX_U48,
+        block_delay: params.block_delay,
     };
     updated.validate()?;
     Ok(updated)
@@ -590,26 +697,54 @@ fn rolled_back_punishment(
 
 /// Simulate the atomic state effects of one exact-input swap.
 ///
-/// This assumes standard token transfers: the input active reserve increases
-/// by `amount_in`, while the output active reserve decreases by
-/// `quote.amount_out + quote.fee`. The quote already includes the current
-/// punishment; that effective fee is committed only when settlement succeeds.
-/// Full-gross reserve subtraction also requires all charged fees to be credited
-/// (`partner fee == 0` or a configured partner operator) and adequate uint112
-/// treasury/global partner/per-router fee-bucket capacity. These fields are
-/// outside [`PoolParams`]; publication can preflight them with
-/// [`crate::try_validate_fee_accounting_capacity`].
-/// Initial active reserves must also match the token balance partition after
-/// pending deposits and global fees; an unsynced donation is not modeled.
-/// External transfer failures can be marked afterwards with
-/// [`SwapSimulation::mark_rolled_back`].
+/// Treasury remains in the trading reserves. This convenience entrypoint assumes
+/// zero partner share. Use [`try_simulate_successful_swap_with_fee_accounting`]
+/// with the execution router's coherent fee state when it has a partner share.
 pub fn try_simulate_successful_swap(
     params: &PoolParams,
     amount_in: U256,
     direction: Direction,
     fee_multiplier: U256,
 ) -> Result<SwapSimulation, MathError> {
+    try_simulate_successful_swap_with_fee_accounting(
+        params,
+        amount_in,
+        direction,
+        fee_multiplier,
+        &crate::FeeAccountingState::default(),
+    )
+}
+
+/// Simulate active treasury with the execution router's partner fee configuration.
+/// Only net output and credited partner fees leave trading reserves. Partner fees
+/// round down per swap; a missing partner operator skips partner credit exactly
+/// as Solidity does. Bucket overflow must be preflighted separately with
+/// [`crate::try_validate_fee_accounting_capacity`]. Reserves already include
+/// treasury and exclude pending deposits and credited global partner fees.
+pub fn try_simulate_successful_swap_with_fee_accounting(
+    params: &PoolParams,
+    amount_in: U256,
+    direction: Direction,
+    fee_multiplier: U256,
+    accounting: &crate::FeeAccountingState,
+) -> Result<SwapSimulation, MathError> {
+    if accounting.partner_fee > crate::PARTNER_FEE_SCALE {
+        return Err(MathError::InvalidPartnerFee);
+    }
     params.validate()?;
+    if !params.is_fresh() {
+        let quote = match direction {
+            Direction::XToY => try_quote_x_to_y_with_multiplier(params, amount_in, fee_multiplier)?,
+            Direction::YToX => try_quote_y_to_x_with_multiplier(params, amount_in, fee_multiplier)?,
+        };
+        return Ok(SwapSimulation {
+            quote,
+            punishment: rolled_back_punishment(params, 0),
+            pre_swap: *params,
+            post_swap: *params,
+            status: SimulationStatus::RolledBack(RollbackReason::StalePrice),
+        });
+    }
     let punishment = try_punishment_transition(params, amount_in, direction)?;
     let quote = match direction {
         Direction::XToY => try_quote_x_to_y_with_multiplier(params, amount_in, fee_multiplier)?,
@@ -626,7 +761,16 @@ pub fn try_simulate_successful_swap(
         });
     }
 
-    let gross_output = try_add(quote.amount_out, quote.fee)?;
+    let partner_fee = if accounting.partner_operator_present {
+        try_mul_div(
+            quote.fee,
+            U256::from(accounting.partner_fee),
+            U256::from(crate::PARTNER_FEE_SCALE),
+        )?
+    } else {
+        U256::ZERO
+    };
+    let output_debit = try_add(quote.amount_out, partner_fee)?;
     let mut post_swap = *params;
     post_swap.fee_ask_x24 = punishment.fee_ask_x24;
     post_swap.fee_bid_x24 = punishment.fee_bid_x24;
@@ -637,7 +781,7 @@ pub fn try_simulate_successful_swap(
                 false
             } else {
                 post_swap.reserve_x = params.reserve_x + amount_in.as_u128();
-                post_swap.reserve_y -= gross_output.as_u128();
+                post_swap.reserve_y -= output_debit.as_u128();
                 true
             }
         }
@@ -646,7 +790,7 @@ pub fn try_simulate_successful_swap(
                 false
             } else {
                 post_swap.reserve_y = params.reserve_y + amount_in.as_u128();
-                post_swap.reserve_x -= gross_output.as_u128();
+                post_swap.reserve_x -= output_debit.as_u128();
                 true
             }
         }
@@ -694,6 +838,10 @@ mod tests {
             reserve_x: 1_000_000,
             reserve_y: 1_000_000,
             max_punishment_x24: 16_778,
+            max_decay_multiplier_x24: 0,
+            current_block: 0,
+            latest_update_block: 0,
+            block_delay: 1,
         }
     }
 
@@ -776,7 +924,7 @@ mod tests {
         p.max_punishment_x24 = MAX_U24;
         assert_eq!(
             try_punishment_x24(&p, U256::from(300u64), Direction::XToY).unwrap(),
-            5_592_406
+            621_379
         );
     }
 
@@ -818,16 +966,16 @@ mod tests {
         )
         .unwrap();
         assert_eq!(simulation.status, SimulationStatus::Applied);
-        assert_eq!(simulation.quote.amount_out, U256::from(99_995u64));
-        assert_eq!(simulation.quote.fee, U256::from(5u64));
-        assert_eq!(simulation.quote.effective_fee_x24, 839);
+        assert_eq!(simulation.quote.amount_out, U256::from(100_000u64));
+        assert_eq!(simulation.quote.fee, U256::ZERO);
+        assert_eq!(simulation.quote.effective_fee_x24, 3);
         assert!(simulation.punishment.applied_punishment_x24 > 0);
         assert_eq!(simulation.post_swap.reserve_x, 1_100_000);
         assert_eq!(simulation.post_swap.reserve_y, 900_000);
 
         let next_quote =
             try_quote_x_to_y(simulation.effective_params(), U256::from(100_000u64)).unwrap();
-        assert!(next_quote.fee > U256::ZERO);
+        assert_eq!(next_quote.effective_fee_x24, 6);
     }
 
     #[test]
@@ -884,14 +1032,14 @@ mod tests {
 
         assert_eq!(
             single_execution.quote.amount_out,
-            U256::from(500_000_000_000_000_000_000_000u128)
+            U256::from(875_000_000_000_000_000_000_000u128)
         );
         assert_eq!(
             split_total_out,
-            U256::from(724_999_934_434_890_747_070_315u128)
+            U256::from(999_312_406_778_335_571_289_065u128)
         );
-        assert_eq!(single_execution.post_swap.fee_bid_x24, 8_388_608);
-        assert_eq!(split.fee_bid_x24, 8_388_610);
+        assert_eq!(single_execution.post_swap.fee_bid_x24, 2_097_152);
+        assert_eq!(split.fee_bid_x24, 20_971);
         assert!(split_total_out > single_execution.quote.amount_out);
     }
 

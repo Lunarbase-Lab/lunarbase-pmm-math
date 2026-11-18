@@ -12,6 +12,7 @@ import (
 )
 
 const (
+	vectorStalePrice                = "StalePrice"
 	vectorApplied                   = "Applied"
 	vectorSwapImpossible            = "SwapImpossible"
 	vectorReserveTransitionOverflow = "ReserveTransitionOverflow"
@@ -31,32 +32,36 @@ type parityUpdate struct {
 }
 
 type parityVector struct {
-	SchemaVersion        uint32        `json:"schemaVersion"`
-	Name                 string        `json:"name"`
-	Seed                 string        `json:"seed"`
-	Dir                  string        `json:"dir"`
-	AnchorPrice          string        `json:"anchorPrice"`
-	FeeAskX24            string        `json:"feeAskX24"`
-	FeeBidX24            string        `json:"feeBidX24"`
-	ReserveX             string        `json:"reserveX"`
-	ReserveY             string        `json:"reserveY"`
-	MaxPunishmentX24     string        `json:"maxPunishmentX24"`
-	FeeMultiplier        string        `json:"feeMultiplier"`
-	AmountIn             string        `json:"amountIn"`
-	AmountOut            string        `json:"amountOut"`
-	PNext                string        `json:"pNext"`
-	FeeAmount            string        `json:"feeAmount"`
-	Outcome              string        `json:"outcome"`
-	RevertSelector       string        `json:"revertSelector"`
-	RevertClass          string        `json:"revertClass"`
-	DesiredPunishmentX24 string        `json:"desiredPunishmentX24"`
-	EffectiveFeeX24      string        `json:"effectiveFeeX24"`
-	AppliedPunishmentX24 string        `json:"appliedPunishmentX24"`
-	FeeAskX24After       string        `json:"feeAskX24After"`
-	FeeBidX24After       string        `json:"feeBidX24After"`
-	ReserveXAfter        string        `json:"reserveXAfter"`
-	ReserveYAfter        string        `json:"reserveYAfter"`
-	Update               *parityUpdate `json:"update"`
+	MaxDecayMultiplierX24 string        `json:"maxDecayMultiplierX24"`
+	CurrentBlock          string        `json:"currentBlock"`
+	LatestUpdateBlock     string        `json:"latestUpdateBlock"`
+	BlockDelay            string        `json:"blockDelay"`
+	SchemaVersion         uint32        `json:"schemaVersion"`
+	Name                  string        `json:"name"`
+	Seed                  string        `json:"seed"`
+	Dir                   string        `json:"dir"`
+	AnchorPrice           string        `json:"anchorPrice"`
+	FeeAskX24             string        `json:"feeAskX24"`
+	FeeBidX24             string        `json:"feeBidX24"`
+	ReserveX              string        `json:"reserveX"`
+	ReserveY              string        `json:"reserveY"`
+	MaxPunishmentX24      string        `json:"maxPunishmentX24"`
+	FeeMultiplier         string        `json:"feeMultiplier"`
+	AmountIn              string        `json:"amountIn"`
+	AmountOut             string        `json:"amountOut"`
+	PNext                 string        `json:"pNext"`
+	FeeAmount             string        `json:"feeAmount"`
+	Outcome               string        `json:"outcome"`
+	RevertSelector        string        `json:"revertSelector"`
+	RevertClass           string        `json:"revertClass"`
+	DesiredPunishmentX24  string        `json:"desiredPunishmentX24"`
+	EffectiveFeeX24       string        `json:"effectiveFeeX24"`
+	AppliedPunishmentX24  string        `json:"appliedPunishmentX24"`
+	FeeAskX24After        string        `json:"feeAskX24After"`
+	FeeBidX24After        string        `json:"feeBidX24After"`
+	ReserveXAfter         string        `json:"reserveXAfter"`
+	ReserveYAfter         string        `json:"reserveYAfter"`
+	Update                *parityUpdate `json:"update"`
 }
 
 func (v parityVector) label(line int) string {
@@ -79,18 +84,24 @@ func parseVectorU32(t *testing.T, value string) uint32 {
 
 func clonePoolParams(params *PoolParams) *PoolParams {
 	return &PoolParams{
-		SqrtPriceX96:     new(uint256.Int).Set(params.SqrtPriceX96),
-		FeeAskX24:        params.FeeAskX24,
-		FeeBidX24:        params.FeeBidX24,
-		ReserveX:         new(uint256.Int).Set(params.ReserveX),
-		ReserveY:         new(uint256.Int).Set(params.ReserveY),
-		MaxPunishmentX24: params.MaxPunishmentX24,
+		BlockDelay:            params.BlockDelay,
+		CurrentBlock:          params.CurrentBlock,
+		LatestUpdateBlock:     params.LatestUpdateBlock,
+		MaxDecayMultiplierX24: params.MaxDecayMultiplierX24,
+		SqrtPriceX96:          new(uint256.Int).Set(params.SqrtPriceX96),
+		FeeAskX24:             params.FeeAskX24,
+		FeeBidX24:             params.FeeBidX24,
+		ReserveX:              new(uint256.Int).Set(params.ReserveX),
+		ReserveY:              new(uint256.Int).Set(params.ReserveY),
+		MaxPunishmentX24:      params.MaxPunishmentX24,
 	}
 }
 
 func expectedVectorRevert(t *testing.T, outcome string) (string, string) {
 	t.Helper()
 	switch outcome {
+	case vectorStalePrice:
+		return "0x19abf40e", "StalePrice()"
 	case vectorApplied:
 		return "0x00000000", "None"
 	case vectorSwapImpossible:
@@ -120,7 +131,7 @@ func runVectorFile(t *testing.T, path string) {
 		}
 		var vector parityVector
 		require.NoError(t, json.Unmarshal(scanner.Bytes(), &vector), "%s line %d", path, line)
-		require.Equal(t, uint32(4), vector.SchemaVersion, "%s line %d schema", path, line)
+		require.Equal(t, uint32(6), vector.SchemaVersion, "%s line %d schema", path, line)
 		label := vector.label(line)
 		expectedSelector, expectedClass := expectedVectorRevert(t, vector.Outcome)
 		require.Equal(t, expectedSelector, vector.RevertSelector, "%s revertSelector", label)
@@ -139,12 +150,16 @@ func runVectorFile(t *testing.T, path string) {
 		}
 
 		params := &PoolParams{
-			SqrtPriceX96:     u(vector.AnchorPrice),
-			FeeAskX24:        parseVectorU32(t, vector.FeeAskX24),
-			FeeBidX24:        parseVectorU32(t, vector.FeeBidX24),
-			ReserveX:         u(vector.ReserveX),
-			ReserveY:         u(vector.ReserveY),
-			MaxPunishmentX24: parseVectorU32(t, vector.MaxPunishmentX24),
+			BlockDelay:            mustVectorU64(t, vector.BlockDelay),
+			CurrentBlock:          mustVectorU64(t, vector.CurrentBlock),
+			LatestUpdateBlock:     mustVectorU64(t, vector.LatestUpdateBlock),
+			MaxDecayMultiplierX24: mustVectorU64(t, vector.MaxDecayMultiplierX24),
+			SqrtPriceX96:          u(vector.AnchorPrice),
+			FeeAskX24:             parseVectorU32(t, vector.FeeAskX24),
+			FeeBidX24:             parseVectorU32(t, vector.FeeBidX24),
+			ReserveX:              u(vector.ReserveX),
+			ReserveY:              u(vector.ReserveY),
+			MaxPunishmentX24:      parseVectorU32(t, vector.MaxPunishmentX24),
 		}
 		amountIn := u(vector.AmountIn)
 		multiplier := u(vector.FeeMultiplier)
@@ -214,6 +229,12 @@ func runVectorFile(t *testing.T, path string) {
 			desired = simulation.DesiredPunishmentX24
 			appliedPunishment = simulation.AppliedPunishmentX24
 			swapImpossible++
+		case vectorStalePrice:
+			require.NoError(t, simulationErr, "%s structured outcome", label)
+			require.Equal(t, SimulationStatusStalePrice, simulation.Status, "%s status", label)
+			require.False(t, simulation.Executable)
+			desired = simulation.DesiredPunishmentX24
+			appliedPunishment = simulation.AppliedPunishmentX24
 		case vectorReserveTransitionOverflow:
 			require.NoError(t, simulationErr, "%s structured outcome", label)
 			require.NotNil(t, simulation, "%s rejected simulation", label)
@@ -282,4 +303,11 @@ func TestDeterministicVectors(t *testing.T) {
 
 func TestFuzzVectors(t *testing.T) {
 	runVectorFile(t, "testdata/fuzz_vectors.jsonl")
+}
+
+func mustVectorU64(testingContext *testing.T, value string) uint64 {
+	testingContext.Helper()
+	parsed, err := strconv.ParseUint(value, 10, 64)
+	require.NoError(testingContext, err)
+	return parsed
 }

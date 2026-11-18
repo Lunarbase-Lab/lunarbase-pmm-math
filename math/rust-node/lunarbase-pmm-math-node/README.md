@@ -1,7 +1,7 @@
 # @lunarbase-lab/pmm-math
 
 Native Node.js binding for the current LunarBase linear quote and immediate
-directional-punishment math. Its outputs are replayed against deterministic
+cubic punishment and price-age spread math. Its outputs are replayed against deterministic
 and seeded-fuzz JSONL vectors produced by Solidity.
 
 ## Install
@@ -36,6 +36,10 @@ const params = {
   reserveX: "1000000000000000000000",
   reserveY: "1000000000000000000000",
   maxPunishmentX24: 1_677_721, // about 10% maximum increment
+  maxDecayMultiplierX24: "50331648", // 3 * Q24; uint64 stays a string
+  currentBlock: "105",
+  latestUpdateBlock: "100",
+  blockDelay: "10",
   amountIn: "1000000000000000000",
   feeMultiplier: "1",
 } satisfies QuoteParams;
@@ -63,6 +67,7 @@ const book = buildOrderBook({
   reserveX: params.reserveX,
   reserveY: params.reserveY,
   maxPunishmentX24: params.maxPunishmentX24,
+  maxDecayMultiplierX24: params.maxDecayMultiplierX24,
   feeMultiplier: params.feeMultiplier,
   snapshotBlock: "100",
   maxExecutionBlock: "101", // last block covered by this signed quote policy
@@ -81,8 +86,10 @@ if (book.status === OrderBookStatus.Active) {
 
 `quoteXToY` uses the bid side; `quoteYToX` uses the ask side. Each triggering
 quote computes its punishment from the pre-swap reserves, saturating-adds it to
-the stored directional fee, and immediately prices output with that
-`effectiveFeeX24`. Successful settlement persists the same fee; any rollback
+the stored directional fee, and scales it with the cubic price-age multiplier
+before charging the output. `effectiveFeeX24` is the unaged value; successful
+settlement persists that value. Freshness includes `latestUpdateBlock +
+blockDelay`; older quotes return zero and simulations report `StalePrice`; any rollback
 leaves stored state unchanged.
 `sqrtPriceNext` is retained for ABI compatibility and always equals
 `sqrtPriceX96`.
@@ -106,11 +113,11 @@ the current mechanism.
 | Function | Purpose |
 | --- | --- |
 | `quoteXToY(params)`, `quoteYToX(params)` | Triggering quote with immediate effective fee |
-| `simulateXToY(params)`, `simulateYToX(params)` | Standard-token counterfactual quote, punishment, and reserve transition |
+| `simulateXToY(params, accounting?)`, `simulateYToX(params, accounting?)` | Standard-token counterfactual quote, punishment, and reserve transition |
 | `buildOrderBook(params)` | Cached Pool snapshot to two protocol-neutral directional cumulative-size ladders |
 | `buildValidatedOrderBook(snapshot, config)` | Bounded exhaustive lot-policy book, including mixed-direction sequences |
 | `buildPreciseOrderBook(snapshot, config, precision)` | Fit up to 20 conservative levels; report observed underquote and target attainment |
-| `validateFeeAccountingCapacity(snapshot, config, accounting)` | Throw on uncredited partner fees or insufficient uint112 bucket headroom |
+| `validateFeeAccountingCapacity(snapshot, config)` | Throw on uncredited partner fees or insufficient uint112 bucket headroom |
 | `ladderAmountOut(levels, amountIn, cursor?)` | Exact per-tranche floor sum; `null` beyond depth |
 | `geometricSizes(cap, levels)` | Power-of-two cumulative grid (maximum 20 levels) |
 | `priceToSqrtPriceX96(price)`, `sqrtPriceX96ToPrice(p)` | Decimal price and Q64.96 anchor helpers |
@@ -151,13 +158,13 @@ returning a partial guarantee. An active certified result has
 config and coverage counts. The adapter must enforce the same policy and guard
 external state changes with exact `amountOutMinimum`.
 Before signing, call `validateFeeAccountingCapacity` with the same snapshot,
-config and cached `FeeAccountingState`. It checks that partner share
+`config`, with cached `FeeAccountingState` in `snapshot.feeAccounting`. It checks that partner share
 (`BPS=1_000_000`) has an operator when nonzero, and that global treasury/partner
 and per-router cumulative fee buckets have conservative uint112 headroom.
 The certificate is a price/reserve/punishment-model guarantee under these
 conditions and standard token behavior; it cannot guarantee arbitrary EVM calls.
 Reconcile stored reserves against raw Pool token balances minus pending escrow
-and global fee buckets before claiming exact transitions. Unsynced donations
+and credited global partner-fee buckets before claiming exact transitions. Unsynced donations
 already present at the snapshot are not detectable from the math inputs alone.
 
 For a multilevel book, use `buildPreciseOrderBook` with the same snapshot,
@@ -166,7 +173,8 @@ accounting preflight and on-chain-enforced policy:
 ```ts
 import { buildPreciseOrderBook, validateFeeAccountingCapacity } from "@lunarbase-lab/pmm-math";
 
-validateFeeAccountingCapacity(snapshot, config, cachedFeeAccounting);
+snapshot.feeAccounting = cachedFeeAccounting;
+validateFeeAccountingCapacity(snapshot, config);
 const precise = buildPreciseOrderBook(snapshot, config, {
   maxLevels: 20,
   targetUnderquoteBps: 10, // requested maximum 0.10% fitting gap
@@ -223,3 +231,13 @@ The same implementation is published as
 ## License
 
 MIT OR Apache-2.0.
+
+### Active treasury
+
+Simulations default to zero partner share and retain treasury fees in reserves.
+For a partner route pass `FeeAccountingState` as the optional second simulation
+argument. Only credited floor-rounded partner fees and net output leave reserves.
+Stateful books read the same configuration from `snapshot.feeAccounting`.
+`validateFeeAccountingCapacity(snapshot, config)` requires that field and checks
+headroom against anchor-valued cumulative input; old three-argument calls must
+migrate. Supplied reserves already include treasury.

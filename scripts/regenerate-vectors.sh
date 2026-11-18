@@ -77,6 +77,21 @@ sha256_file() {
   fi
 }
 
+# The clean pinned oracle supplies cubic punishment and decay. Apply the
+# separately hashed active-treasury sync change in a disposable copy only.
+ORACLE_BASE_CONTRACTS="$DARK_CONTRACTS"
+BASE_POOL_BRIDGE_SHA256="$(sha256_file "$DARK_CONTRACTS/src/libraries/PoolBridgeLib.sol")"
+ORACLE_PATCH="$PARITY_ROOT/active-treasury.patch"
+ORACLE_PATCH_SHA256="$(sha256_file "$ORACLE_PATCH")"
+OVERLAY_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/lunarbase-pmm-oracle.XXXXXX")"
+trap 'rm -rf "$OVERLAY_ROOT"' EXIT
+cp -a "$DARK_CONTRACTS/src" "$OVERLAY_ROOT/src"
+cp "$DARK_CONTRACTS/foundry.toml" "$OVERLAY_ROOT/foundry.toml"
+cp "$DARK_CONTRACTS/remappings.txt" "$OVERLAY_ROOT/remappings.txt"
+ln -s "$DARK_CONTRACTS/dependencies" "$OVERLAY_ROOT/dependencies"
+patch --silent -p1 -d "$OVERLAY_ROOT" < "$ORACLE_PATCH"
+DARK_CONTRACTS="$OVERLAY_ROOT"
+
 remappings=()
 while IFS= read -r mapping; do
   [[ -z "$mapping" ]] && continue
@@ -114,6 +129,9 @@ if [[ ! "$FUZZ_RUNS" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
+echo "Checking active treasury and partner reserve settlement"
+forge test "${forge_common[@]}" --match-contract ActiveTreasuryParity --fuzz-runs "$FUZZ_RUNS" --fuzz-seed "$FUZZ_SEED" --threads 1
+
 echo "Generating $((FUZZ_RUNS * 2)) seeded Solidity fuzz rows"
 forge test "${forge_common[@]}" \
   --match-contract PoolFuzzParityOracle \
@@ -133,7 +151,7 @@ if [[ ! -s "$FUZZ_SOURCE" ]]; then
 fi
 
 actual_deterministic_rows="$(wc -l < "$DETERMINISTIC_SOURCE" | tr -d '[:space:]')"
-expected_deterministic_rows=49
+expected_deterministic_rows=71
 if [[ "$actual_deterministic_rows" != "$expected_deterministic_rows" ]]; then
   echo "expected $expected_deterministic_rows deterministic rows, generated $actual_deterministic_rows" >&2
   exit 1
@@ -147,8 +165,8 @@ if [[ "$actual_fuzz_rows" != "$expected_fuzz_rows" ]]; then
 fi
 
 CORPUS_SCHEMA_VERSION="$(head -n 1 "$DETERMINISTIC_SOURCE" | jq -er '.schemaVersion')"
-if [[ "$CORPUS_SCHEMA_VERSION" != "4" ]]; then
-  echo "expected schema v4 deterministic corpus, generated v$CORPUS_SCHEMA_VERSION" >&2
+if [[ "$CORPUS_SCHEMA_VERSION" != "6" ]]; then
+  echo "expected schema v6 deterministic corpus, generated v$CORPUS_SCHEMA_VERSION" >&2
   exit 1
 fi
 if ! jq -s -e --argjson schema "$CORPUS_SCHEMA_VERSION" \
@@ -167,6 +185,7 @@ cp "$FUZZ_SOURCE" "$GO_VECTORS/fuzz_vectors.jsonl"
 
 SWAP_LIB_SHA256="$(sha256_file "$DARK_CONTRACTS/src/libraries/SwapLib.sol")"
 PERIPHERY_LIB_SHA256="$(sha256_file "$DARK_CONTRACTS/src/libraries/PeripheryLib.sol")"
+POOL_BRIDGE_SHA256="$(sha256_file "$DARK_CONTRACTS/src/libraries/PoolBridgeLib.sol")"
 POOL_SHA256="$(sha256_file "$DARK_CONTRACTS/src/Pool.sol")"
 DETERMINISTIC_SHA256="$(sha256_file "$DETERMINISTIC_SOURCE")"
 FUZZ_SHA256="$(sha256_file "$FUZZ_SOURCE")"
@@ -176,6 +195,9 @@ printf '%s\n' \
   "  \"schemaVersion\": $CORPUS_SCHEMA_VERSION," \
   "  \"solidityOracleCommit\": \"$ORACLE_COMMIT\"," \
   '  "solidityOracleDirty": false,' \
+  "  \"solidityOraclePatchSha256\": \"$ORACLE_PATCH_SHA256\"," \
+  "  \"basePoolBridgeLibSha256\": \"$BASE_POOL_BRIDGE_SHA256\"," \
+  "  \"poolBridgeLibSha256\": \"$POOL_BRIDGE_SHA256\"," \
   "  \"forgeVersion\": \"$FORGE_VERSION\"," \
   "  \"forgeCommit\": \"$FORGE_COMMIT\"," \
   "  \"swapLibSha256\": \"$SWAP_LIB_SHA256\"," \
@@ -196,7 +218,7 @@ echo "  $GO_VECTORS/deterministic_vectors.jsonl"
 echo "  $GO_VECTORS/fuzz_vectors.jsonl"
 echo "  $MANIFEST"
 
-bash "$SCRIPT_DIR/verify-vectors.sh" "$DARK_CONTRACTS"
+bash "$SCRIPT_DIR/verify-vectors.sh" "$ORACLE_BASE_CONTRACTS"
 
 if [[ "${PARITY_SKIP_REPLAY_TESTS:-0}" == "1" ]]; then
   echo "Skipping Rust, Go, and Node.js replay tests (PARITY_SKIP_REPLAY_TESTS=1)"

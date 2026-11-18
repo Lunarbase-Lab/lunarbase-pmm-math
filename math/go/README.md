@@ -1,7 +1,7 @@
 # Go math mirror
 
 `lunarbasepmm` mirrors the Solidity `SwapLib` linear-anchor quote and immediate
-directional-punishment state transition.
+cubic punishment and price-age spread transitions.
 
 ## State and numeric domains
 
@@ -11,6 +11,9 @@ complete Solidity domains remain available. `ValidatePoolParams` enforces:
 - `SqrtPriceX96`: `uint160`
 - `FeeAskX24`, `FeeBidX24`, `MaxPunishmentX24`: `uint24`
 - `ReserveX`, `ReserveY`: `uint112`
+- `MaxDecayMultiplierX24`: `uint64` Q24 (zero legacy value or at least Q24)
+- `CurrentBlock`: `uint64`; `LatestUpdateBlock`: `uint48`
+- `BlockDelay`: positive `uint48`; freshness includes the last delay block
 
 `MaxUint24` is a sentinel for conceptual `Q24Scale` (100%) for both fees and
 maximum punishment.
@@ -32,8 +35,8 @@ Y -> X: floor(floor(amountIn * Q96 / anchor) * Q96 / anchor)
 
 Punishment is computed first and saturating-added to the stored directional
 fee. The gross result is then checked against the output active reserve before
-that effective fee is charged. `EffectiveFeeX24` exposes the fee used before
-the caller multiplier, and `SqrtPriceNext` always equals the anchor. A stored
+the cubic price-age multiplier is applied, then the output fee is charged.
+`EffectiveFeeX24` exposes the persisted fee before age and caller multipliers, and `SqrtPriceNext` always equals the anchor. A stored
 fee of `MaxUint24` consumes
 the entire gross output. Multiplier overflow or a scaled fee greater than or
 equal to gross output has the same full-fee result as Solidity.
@@ -52,23 +55,30 @@ ceil rounding:
 inventoryY = floor(floor(reserveX * anchor / Q96) * anchor / Q96) + reserveY
 swapY      = X->Y ? floor(floor(amountIn * anchor / Q96) * anchor / Q96)
                    : amountIn
-desired    = ceil(effectiveMax * min(swapY, inventoryY) / inventoryY)
+ratioX48   = ceil(min(swapY, inventoryY) * 2^48 / inventoryY)
+desired    = min(ceil(effectiveMax * ratioX48^3 / 2^144), MaxUint24)
 ```
 
 `TransitionDirectionalFees` performs the saturating add without mutating a
 pool. `ApplyDirectionalPunishment` commits just that fee transition.
 `ApplyStateUpdate` replaces the anchor and both effective fees, resetting
-accumulated punishment while preserving reserves and `MaxPunishmentX24`.
+accumulated punishment and setting `LatestUpdateBlock = CurrentBlock` while
+preserving reserves and configuration. `DecayFeeX24` mirrors cubic price-age
+fee scaling; see the [canonical formulas](../../README.md#state-and-quote-model).
+Only the unaged punishment fee persists after settlement.
 
 `SimulateStandardTokenSwap` / `SimulateStandardTokenSwapWithMultiplier` compute
 desired punishment from pre-swap reserves, charge the resulting effective fee
 on the current quote, and atomically commit that directional fee together with
 the standard-token active reserve transition. X -> Y adds input to X and
-subtracts `AmountOut + Fee` from active
-Y; Y -> X is symmetric. Any quote, math, impossible-swap, or uint112 reserve
+subtracts `AmountOut` from active Y; treasury remains tradable. Y -> X is
+symmetric. For nonzero partner share use `SimulateStandardTokenSwapWithPartnerFee`
+or `SimulateStandardTokenSwapWithPartnerFeeInto`, supplying the 1e6-scaled
+share and operator status. These additionally debit the floor-rounded partner
+fee only when its operator exists. Bucket headroom remains a caller preflight. Any quote, math, impossible-swap, or uint112 reserve
 failure leaves `PoolParams` unchanged.
 
-`SwapImpossible` and `ReserveTransitionOverflow` are completed, structured
+`StalePrice`, `SwapImpossible`, and `ReserveTransitionOverflow` are completed, structured
 simulation outcomes rather than Go errors. The returned `SwapSimulationResult`
 has `Executable == false`, the matching `Status`, zero
 `AppliedPunishmentX24`, and preserves the counterfactual quote,
@@ -91,6 +101,6 @@ reused output never exposes stale fields from an earlier quote.
 ## Tests
 
 `go test ./...` includes deterministic BigInt property suites and replays the
-same 49 deterministic plus 10,000 seeded-fuzz Solidity rows as Rust and Node.
+same 71 deterministic plus 10,000 seeded-fuzz Solidity rows as Rust and Node.
 Quote output, fee, desired/applied punishment, directional fees, reserves, and
 rollback status must match bit-for-bit.

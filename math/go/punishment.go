@@ -24,6 +24,8 @@ const (
 	// SimulationStatusLaterRevert means a caller marked a later transfer or
 	// accounting failure and the previously applied state was restored.
 	SimulationStatusLaterRevert
+	// SimulationStatusStalePrice means the inclusive freshness window expired.
+	SimulationStatusStalePrice
 )
 
 // SwapRollbackReason identifies the Solidity revert whose transaction
@@ -42,12 +44,16 @@ const (
 )
 
 type poolStateSnapshot struct {
-	sqrtPriceX96     uint256.Int
-	feeAskX24        uint32
-	feeBidX24        uint32
-	reserveX         uint256.Int
-	reserveY         uint256.Int
-	maxPunishmentX24 uint32
+	sqrtPriceX96          uint256.Int
+	feeAskX24             uint32
+	feeBidX24             uint32
+	reserveX              uint256.Int
+	reserveY              uint256.Int
+	maxPunishmentX24      uint32
+	maxDecayMultiplierX24 uint64
+	currentBlock          uint64
+	latestUpdateBlock     uint64
+	blockDelay            uint64
 }
 
 func snapshotPoolState(params *PoolParams) (snapshot poolStateSnapshot) {
@@ -57,6 +63,10 @@ func snapshotPoolState(params *PoolParams) (snapshot poolStateSnapshot) {
 	snapshot.reserveX.Set(params.ReserveX)
 	snapshot.reserveY.Set(params.ReserveY)
 	snapshot.maxPunishmentX24 = params.MaxPunishmentX24
+	snapshot.maxDecayMultiplierX24 = params.MaxDecayMultiplierX24
+	snapshot.currentBlock = params.CurrentBlock
+	snapshot.latestUpdateBlock = params.LatestUpdateBlock
+	snapshot.blockDelay = params.BlockDelay
 	return snapshot
 }
 
@@ -66,7 +76,11 @@ func poolStateMatches(params *PoolParams, snapshot *poolStateSnapshot) bool {
 		params.FeeBidX24 == snapshot.feeBidX24 &&
 		params.ReserveX.Cmp(&snapshot.reserveX) == 0 &&
 		params.ReserveY.Cmp(&snapshot.reserveY) == 0 &&
-		params.MaxPunishmentX24 == snapshot.maxPunishmentX24
+		params.MaxPunishmentX24 == snapshot.maxPunishmentX24 &&
+		params.MaxDecayMultiplierX24 == snapshot.maxDecayMultiplierX24 &&
+		params.CurrentBlock == snapshot.currentBlock &&
+		params.LatestUpdateBlock == snapshot.latestUpdateBlock &&
+		params.BlockDelay == snapshot.blockDelay
 }
 
 func restorePoolState(params *PoolParams, snapshot *poolStateSnapshot) {
@@ -76,6 +90,10 @@ func restorePoolState(params *PoolParams, snapshot *poolStateSnapshot) {
 	params.ReserveX.Set(&snapshot.reserveX)
 	params.ReserveY.Set(&snapshot.reserveY)
 	params.MaxPunishmentX24 = snapshot.maxPunishmentX24
+	params.MaxDecayMultiplierX24 = snapshot.maxDecayMultiplierX24
+	params.CurrentBlock = snapshot.currentBlock
+	params.LatestUpdateBlock = snapshot.latestUpdateBlock
+	params.BlockDelay = snapshot.blockDelay
 }
 
 // SwapSimulationResult contains the triggering immediate-punishment quote,
@@ -210,8 +228,17 @@ func desiredPunishmentX24Validated(params *PoolParams, amountIn *uint256.Int, di
 	}
 	if !swapWealth.Lt(&inventoryWealth) {
 		calculated.Set(&effectiveMaximum)
-	} else if err := mulDivUpChecked(&calculated, &effectiveMaximum, &swapWealth, &inventoryWealth); err != nil {
-		return 0, err
+	} else {
+		var ratioX48, ratioCubed, scaleX48, scaleCubed uint256.Int
+		scaleX48.Lsh(one, 48)
+		scaleCubed.Lsh(one, 144)
+		if err := mulDivUpChecked(&ratioX48, &swapWealth, &scaleX48, &inventoryWealth); err != nil {
+			return 0, err
+		}
+		ratioCubed.Mul(&ratioX48, &ratioX48).Mul(&ratioCubed, &ratioX48)
+		if err := mulDivUpChecked(&calculated, &effectiveMaximum, &ratioCubed, &scaleCubed); err != nil {
+			return 0, err
+		}
 	}
 
 	if !calculated.Lt(q24) {
@@ -332,12 +359,14 @@ func ApplyStateUpdate(params *PoolParams, anchor *uint256.Int, feeAskX24, feeBid
 	candidate.SqrtPriceX96 = anchor
 	candidate.FeeAskX24 = feeAskX24
 	candidate.FeeBidX24 = feeBidX24
+	candidate.LatestUpdateBlock = params.CurrentBlock & MaxUint48
 	if err := ValidatePoolParams(&candidate); err != nil {
 		return err
 	}
 	params.SqrtPriceX96.Set(anchor)
 	params.FeeAskX24 = feeAskX24
 	params.FeeBidX24 = feeBidX24
+	params.LatestUpdateBlock = params.CurrentBlock & MaxUint48
 	return nil
 }
 
@@ -380,6 +409,37 @@ func SimulateStandardTokenSwapInto(
 	amountIn, feeMultiplier *uint256.Int,
 	direction SwapDirection,
 ) (err error) {
+	return SimulateStandardTokenSwapWithPartnerFeeInto(out, params, amountIn, feeMultiplier, direction, 0, false)
+}
+
+// SimulateStandardTokenSwapWithPartnerFee simulates active treasury with the
+// exact execution router's partner share (1e6 denominator) and operator status.
+// Fee-bucket capacity must be checked by the caller before settlement.
+func SimulateStandardTokenSwapWithPartnerFee(
+	params *PoolParams,
+	amountIn, feeMultiplier *uint256.Int,
+	direction SwapDirection,
+	partnerFee uint32,
+	partnerOperatorPresent bool,
+) (*SwapSimulationResult, error) {
+	out := newSwapSimulationResult()
+	if err := SimulateStandardTokenSwapWithPartnerFeeInto(out, params, amountIn, feeMultiplier, direction, partnerFee, partnerOperatorPresent); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// SimulateStandardTokenSwapWithPartnerFeeInto is the allocation-free partner
+// variant. Treasury fees remain tradable; only net output and credited partner
+// fees leave reserves. Missing partner operators skip credit as in Solidity.
+func SimulateStandardTokenSwapWithPartnerFeeInto(
+	out *SwapSimulationResult,
+	params *PoolParams,
+	amountIn, feeMultiplier *uint256.Int,
+	direction SwapDirection,
+	partnerFee uint32,
+	partnerOperatorPresent bool,
+) (err error) {
 	if out == nil {
 		return fmt.Errorf("%w: nil SwapSimulationResult", ErrInvalidArgument)
 	}
@@ -409,6 +469,9 @@ func SimulateStandardTokenSwapInto(
 		return err
 	}
 
+	if partnerFee > 1_000_000 {
+		return fmt.Errorf("%w: partner fee exceeds 1e6", ErrInvalidArgument)
+	}
 	var desired, effective uint32
 	var quoteErr error
 	if direction == DirectionXToY {
@@ -430,6 +493,10 @@ func SimulateStandardTokenSwapInto(
 		return quoteErr
 	}
 	out.DesiredPunishmentX24 = desired
+	if !params.IsFresh() {
+		out.Status = SimulationStatusStalePrice
+		return nil
+	}
 	if out.AmountOut.IsZero() {
 		out.Status = SimulationStatusSwapImpossible
 		return nil
@@ -441,8 +508,16 @@ func SimulateStandardTokenSwapInto(
 	}
 	applied := effective - storedFeeX24
 
-	var grossOutput uint256.Int
-	if _, overflow := grossOutput.AddOverflow(out.AmountOut, out.Fee); overflow {
+	var partnerDebit, outputDebit uint256.Int
+	if partnerOperatorPresent {
+		var share, denominator uint256.Int
+		share.SetUint64(uint64(partnerFee))
+		denominator.SetUint64(1_000_000)
+		if err := mulDivDownChecked(&partnerDebit, out.Fee, &share, &denominator); err != nil {
+			return err
+		}
+	}
+	if _, overflow := outputDebit.AddOverflow(out.AmountOut, &partnerDebit); overflow {
 		return ErrMathOverflow
 	}
 	var nextReserveX, nextReserveY uint256.Int
@@ -451,7 +526,7 @@ func SimulateStandardTokenSwapInto(
 			out.Status = SimulationStatusReserveTransitionOverflow
 			return nil
 		}
-		if _, underflow := nextReserveY.SubOverflow(params.ReserveY, &grossOutput); underflow {
+		if _, underflow := nextReserveY.SubOverflow(params.ReserveY, &outputDebit); underflow {
 			out.Status = SimulationStatusReserveTransitionOverflow
 			return nil
 		}
@@ -460,7 +535,7 @@ func SimulateStandardTokenSwapInto(
 			out.Status = SimulationStatusReserveTransitionOverflow
 			return nil
 		}
-		if _, underflow := nextReserveX.SubOverflow(params.ReserveX, &grossOutput); underflow {
+		if _, underflow := nextReserveX.SubOverflow(params.ReserveX, &outputDebit); underflow {
 			out.Status = SimulationStatusReserveTransitionOverflow
 			return nil
 		}
@@ -481,4 +556,34 @@ func SimulateStandardTokenSwapInto(
 	out.preSwap = preSwap
 	out.committed = snapshotPoolState(params)
 	return nil
+}
+
+// DecayFeeX24 applies the contract's cubic age multiplier, rounding the additional
+// Q24 fee up before saturation. Age must be inside the inclusive freshness window.
+func DecayFeeX24(feeX24 uint32, maximumMultiplierX24, age, blockDelay uint64) (uint32, error) {
+	if err := validateUint24("feeX24", feeX24); err != nil {
+		return 0, err
+	}
+	if blockDelay == 0 || blockDelay > MaxUint48 || age > blockDelay {
+		return 0, fmt.Errorf("%w: invalid price age or block delay", ErrValueOutOfRange)
+	}
+	if maximumMultiplierX24 <= uint64(Q24Scale) || feeX24 == 0 || age == 0 || feeX24 == MaxUint24 {
+		return feeX24, nil
+	}
+	var numerator, ageCubed, denominator, additionalFee, agedFee uint256.Int
+	numerator.SetUint64(maximumMultiplierX24 - uint64(Q24Scale))
+	numerator.Mul(&numerator, uint256.NewInt(uint64(feeX24)))
+	var ageValue, delayValue uint256.Int
+	ageValue.SetUint64(age)
+	delayValue.SetUint64(blockDelay)
+	ageCubed.Mul(&ageValue, &ageValue).Mul(&ageCubed, &ageValue)
+	denominator.Mul(&delayValue, &delayValue).Mul(&denominator, &delayValue).Mul(&denominator, q24)
+	if err := mulDivUpChecked(&additionalFee, &numerator, &ageCubed, &denominator); err != nil {
+		return 0, err
+	}
+	agedFee.Add(uint256.NewInt(uint64(feeX24)), &additionalFee)
+	if agedFee.Cmp(uint256.NewInt(uint64(MaxUint24))) >= 0 {
+		return MaxUint24, nil
+	}
+	return uint32(agedFee.Uint64()), nil
 }

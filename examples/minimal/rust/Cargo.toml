@@ -1,9 +1,9 @@
 [package]
 name = "example-rust"
-version = "0.0.0"
+version = "0.5.0"
 edition = "2021"
 publish = false
 
 [dependencies]
-lunarbase-pmm-math = { version = "0.4.1", path = "../../../math/rust/lunarbase-pmm-math" }
+lunarbase-pmm-math = { version = "0.5.0", path = "../../../math/rust/lunarbase-pmm-math" }
 ruint = "1.20"

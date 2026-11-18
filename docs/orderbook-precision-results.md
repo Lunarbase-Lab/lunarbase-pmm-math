@@ -1,6 +1,7 @@
 # Adaptive orderbook precision: reproducible sample
 
-These are **synthetic, deterministic test states**, not live Pool telemetry,
+These use the 0.5.0 active-treasury reserve transition.
+They are **synthetic, deterministic test states**, not live Pool telemetry,
 market-wide guarantees, or a recommended production depth/risk configuration.
 
 Run from the math repository:
@@ -21,7 +22,8 @@ machine-dependent timing, are in [orderbook-precision-samples.json](orderbook-pr
 - Active reserves: 100 WETH and 250,000 USDC.
 - Anchor: `floor(Q96 / 20000) = 3961408125713216879677197`, approximately 2,500 USDC/WETH.
 - Initial ask/bid fees: `floor(Q24 / 10000) = 1677`, approximately 1 bp.
-- Caller multiplier: 1. Valid accounting with empty fee buckets is assumed.
+- Caller multiplier: 1. Age scaling is explicitly disabled (`maxDecayMultiplierX24=0`).
+  These measurements isolate cubic punishment. Valid accounting with empty fee buckets is assumed.
 - Input lots: 1 WETH / 2,500 USDC. A fill is 1 or 2 lots; each directional
   ladder has 8 lots of total lifetime depth. Both directions can interleave.
 - Snapshot block 100, latest update 100, block delay 20, execution horizon 105.
@@ -41,23 +43,20 @@ ceilings, so `0.500310 bps` is exposed as `worst_underquote_bps = 1`.
 | Max punishment | Baseline geometric, 20/20 levels | Fitted 1/1 level | Adaptive worst loss | Adaptive levels X/Y | 1 bp target |
 | --- | ---: | ---: | ---: | ---: | --- |
 | 0 | 0.041843 bps | 0.000003 bps | 0.000003 bps | 1 / 1 | Met |
-| `floor(Q24/100)`, about 1% | 3.500614 bps | 3.501106 bps | 0.500310 bps | 4 / 4 | Met |
-| `floor(Q24/10)`, about 10% | 35.089893 bps | 35.022649 bps | 5.018301 bps | 6 / 8 | Not met |
+| `floor(Q24/100)`, about 1% | 0.041247 bps | 0.004175 bps | 0.004175 bps | 1 / 1 | Met |
+| `floor(Q24/10)`, about 10% | 0.117433 bps | 0.004173 bps | 0.004173 bps | 1 / 1 | Met |
 
-The moderate case already meets the target with `max_levels=4`. With the cap at
-20, it uses 12,908 fitting/replay work units and still returns only four levels
-per direction. The stress case uses 30,726 units and returns `target_met=false`;
-the publisher example withholds its levels. This is an observed heuristic miss,
-**not** a mathematical proof that all possible 20-level ladders fail.
+With cubic punishment, all three sampled states meet the target with one
+level per direction and 300 fitting/replay work units. Raising the level cap
+does not add levels after the target is met. These figures replace the
+previous linear-punishment measurements; the same maximum parameter produces
+a much smaller increment for trades that use a small fraction of wealth.
 
 No raw-ladder overquote was found on any allowed transition in these three
-scenarios, including the baseline sampler. The new builder certifies this
-finite domain rather than relying solely on a continuous concavity assumption.
-
-The separate fresh-snapshot discount ceilings are 1, 4 and 36 bps respectively.
-They include reserve/punishment evolution. In particular, reaching 0.500310 bps
-against the worst-state reference does **not** mean every later fill is within
-that distance of the initial best quote.
+scenarios, including the baseline sampler. Every fresh-snapshot discount
+ceiling is 1 bp in these samples. The finite-domain certificate still requires
+the exact declared fill policy and complete snapshot; these measurements do
+not establish a general bound for other states or larger trades.
 
 ## Why exact validation is still needed
 

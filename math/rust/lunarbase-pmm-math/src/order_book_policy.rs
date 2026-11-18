@@ -13,7 +13,7 @@
 //! treasury/partner and per-router uint112 fee-bucket headroom. Call
 //! [`crate::try_validate_fee_accounting_capacity`] on the same cached snapshot.
 //! Initial active reserves must also reconcile with token balances minus pending
-//! deposit escrow and global fee buckets: a preexisting unsynced token donation
+//! deposit escrow and credited global partner-fee buckets: a preexisting unsynced token donation
 //! can change the next `Sync` despite unchanged stored reserves. This library
 //! does not fetch or certify that raw-balance partition.
 //! Neither check is a guarantee of arbitrary token calls or full EVM execution.
@@ -22,9 +22,10 @@ use core::fmt;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::{
-    try_build_order_book, try_simulate_successful_swap, Direction, DirectionalLadder, MathError,
-    OrderBook, OrderBookConfig, OrderBookError, OrderBookLevel, OrderBookSafety, OrderBookState,
-    OrderBookStatus, PoolParams, SimulationStatus, U256Ext, PRICE_SCALE_X18, U256,
+    try_build_order_book, try_simulate_successful_swap_with_fee_accounting, Direction,
+    DirectionalLadder, MathError, OrderBook, OrderBookConfig, OrderBookError, OrderBookLevel,
+    OrderBookSafety, OrderBookState, OrderBookStatus, PoolParams, SimulationStatus, U256Ext,
+    PRICE_SCALE_X18, U256,
 };
 
 /// Hard limit on explored transitions, bounding both CPU work and stored states.
@@ -288,7 +289,10 @@ pub(crate) fn explore_fill_policy(
 ) -> Result<FillExploration, FillPolicyError> {
     let policies = [config.x_to_y, config.y_to_x];
     let initial = ReachableState {
-        pool: state.pool,
+        pool: PoolParams {
+            current_block: state.max_execution_block,
+            ..state.pool
+        },
         cursors: [U256::ZERO; 2],
     };
     let mut seen = BTreeSet::from([initial.key()]);
@@ -308,11 +312,12 @@ pub(crate) fn explore_fill_policy(
                     return Err(FillPolicyError::BudgetExceeded);
                 }
                 checked_transitions += 1;
-                let simulation = try_simulate_successful_swap(
+                let simulation = try_simulate_successful_swap_with_fee_accounting(
                     &current.pool,
                     amount_in,
                     direction,
                     state.fee_multiplier,
+                    &state.fee_accounting,
                 )?;
                 if simulation.status != SimulationStatus::Applied {
                     return Err(FillPolicyError::UnexecutableFill {
@@ -365,6 +370,7 @@ mod tests {
 
     fn state() -> OrderBookState {
         OrderBookState {
+            fee_accounting: crate::FeeAccountingState::default(),
             pool: PoolParams {
                 sqrt_price_x96: Q96,
                 fee_ask_x24: Q24 / 1_000,
@@ -372,12 +378,13 @@ mod tests {
                 reserve_x: 10_000,
                 reserve_y: 10_000,
                 max_punishment_x24: Q24 / 10,
+                max_decay_multiplier_x24: 0,
+                current_block: 100,
+                latest_update_block: 100,
+                block_delay: 3,
             },
             fee_multiplier: U256::from(1),
-            snapshot_block: 100,
             max_execution_block: 101,
-            latest_update_block: 100,
-            block_delay: 3,
             paused: false,
         }
     }
@@ -419,7 +426,7 @@ mod tests {
                     let promised = try_ladder_amount_out_at_cursor(ladder, cursors[index], amount)
                         .unwrap()
                         .unwrap();
-                    let actual = try_simulate_successful_swap(
+                    let actual = crate::try_simulate_successful_swap(
                         &pool,
                         amount,
                         direction,
@@ -589,7 +596,7 @@ mod tests {
         assert_eq!(paused.book.safety, OrderBookSafety::Indicative);
         assert_eq!(paused.checked_transitions, 0);
         snapshot.paused = false;
-        snapshot.max_execution_block = 103;
+        snapshot.max_execution_block = 104;
         assert_eq!(
             try_build_validated_order_book(&snapshot, &config)
                 .unwrap()

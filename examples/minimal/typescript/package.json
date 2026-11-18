@@ -1,6 +1,6 @@
 {
   "name": "example-typescript",
-  "version": "0.0.0",
+  "version": "0.5.0",
   "private": true,
   "type": "module",
   "description": "Minimal example pulling @lunarbase-lab/pmm-math directly from npm.",
@@ -8,7 +8,7 @@
     "run": "tsx index.ts"
   },
   "dependencies": {
-    "@lunarbase-lab/pmm-math": "^0.4.1"
+    "@lunarbase-lab/pmm-math": "^0.5.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

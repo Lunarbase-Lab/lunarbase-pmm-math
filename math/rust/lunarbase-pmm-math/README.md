@@ -4,7 +4,7 @@
 [![docs.rs](https://docs.rs/lunarbase-pmm-math/badge.svg)](https://docs.rs/lunarbase-pmm-math)
 
 Pure Rust mirror of the current on-chain LunarBase linear anchor quotes and
-directional punishment state transitions (**Q64.96** sqrt-price design).
+cubic punishment and price-age spread transitions (**Q64.96** sqrt-price design).
 
 - No `unsafe`, no FFI, no allocations on the hot path.
 - Single dependency: [`ruint`](https://crates.io/crates/ruint) for 256-bit ints.
@@ -16,7 +16,7 @@ directional punishment state transitions (**Q64.96** sqrt-price design).
 
 ```toml
 [dependencies]
-lunarbase-pmm-math = "0.4.1"
+lunarbase-pmm-math = "0.5.0"
 ```
 
 ```rust
@@ -29,6 +29,10 @@ let params = PoolParams {
     reserve_x: 1_000_000_000_000_000_000,
     reserve_y: 1_000_000_000_000_000_000,
     max_punishment_x24: Q24 / 1_000,        // maximum 0.10% increment
+    max_decay_multiplier_x24: 3 * u64::from(Q24),
+    current_block: 105,
+    latest_update_block: 100,
+    block_delay: 10,
 };
 
 let r = quote_x_to_y(&params, U256::from(1_000_000_000_000_000_000u128));
@@ -55,6 +59,7 @@ derive the multiplier from `msg.sender`; for a non-whitelisted caller, pass
 | `try_quote_x_to_y` / `try_quote_y_to_x`                                   | Checked immediate-punishment linear quotes.                |
 | `quote_x_to_y_with_multiplier` / `quote_y_to_x_with_multiplier`           | Panicking convenience wrappers for caller fee paths.       |
 | `try_punishment_x24` / `try_apply_punishment`                             | Desired ceil-rounded increment and saturating transition.  |
+| `try_decay_fee_x24`                                                      | Cubic price-age scaling with exact ceil rounding.           |
 | `try_apply_update`                                                        | Replace anchor and both effective fees like operator `upd`. |
 | `try_simulate_successful_swap`                                            | Immediate fee/reserve transition with rollback marker.     |
 | `try_build_order_book`                                                    | Pure directional `{size, price}` ladder projection.        |
@@ -66,8 +71,8 @@ derive the multiplier from `msg.sender`; for a non-whitelisted caller, pass
 
 ## Order-book projection
 
-`OrderBookState` combines `PoolParams` with the cached snapshot block,
-freshness fields, pause state, and the fee multiplier of the actual execution
+`OrderBookState` combines `PoolParams` (including snapshot/update blocks and
+freshness configuration) with the execution horizon, pause state, and the fee multiplier of the actual execution
 caller. `try_build_order_book` returns empty paused/stale sides or two active
 directional ladders, independent of any particular order-book system. Each
 level's size is cumulative raw input and its price is marginal raw output/input
@@ -95,7 +100,7 @@ positive share requires a partner operator, and relevant treasury/global
 partner/per-router fee buckets need conservative uint112 headroom. Standard
 ERC20 behavior and successful external calls remain separate preconditions.
 Initial stored reserves must reconcile with token balances minus pending
-deposit escrow and global fee buckets; unsynced donations are not modeled.
+deposit escrow and credited global partner-fee buckets; unsynced donations are not modeled.
 
 `try_build_precise_order_book` fits up to 20 levels per direction under the same
 finite policy. `OrderBookPrecision` sets the level cap, target underquote in
@@ -114,7 +119,7 @@ cargo test -p lunarbase-pmm-math
 The focused suite covers nested-floor pricing, uint160/uint112 validation,
 fee and punishment sentinels, ceil rounding, directional saturation, reserve
 transitions, checked `mulDiv` failures, and atomic rollback. It also replays
-49 deterministic and 10,000 seeded-fuzz rows generated from the production
+71 deterministic and 10,000 seeded-fuzz rows generated from the production
 Solidity `Pool`:
 
 ```sh
@@ -136,13 +141,16 @@ separately from this pure-Rust API.
 Both directions quote at the unchanged anchor. X→Y values X in Y with two
 sequential round-down `mulDiv` operations; Y→X performs the inverse with the
 same nested-floor ordering. Before pricing the current output, punishment is
-computed from pre-swap active reserves as
-`ceil(effectiveMaxX24 * swapWealth / inventoryWealth)`, capped at the configured
-maximum. `uint24::MAX` is expanded to conceptual `2^24` before this calculation.
-The increment saturating-adds to bid for X→Y or ask for Y→X; that effective fee
-is exposed as `QuoteResult::effective_fee_x24`, charges the current quote, and
-is persisted only after successful settlement. An operator update replaces
-both effective fees.
+computed from pre-swap active reserves with the cubic Q48-quantized ratio
+in the [canonical formulas](../../../README.md#state-and-quote-model).
+`uint24::MAX` expands to conceptual Q24. The increment saturating-adds to the
+matching directional fee. `QuoteResult::effective_fee_x24` exposes this fee
+before age scaling; only this unaged fee persists after successful settlement.
+`try_decay_fee_x24` applies the cubic price-age multiplier with additional-fee
+ceil rounding and saturation. Freshness is inclusive through the delay;
+stale quotes return zero and simulations report `RollbackReason::StalePrice`.
+`try_apply_update` resets both accumulated fees and the age origin to
+`current_block`, preserving reserves and configuration.
 
 The quote functions do not mutate `PoolParams`. Reusing the same snapshot for
 every chunk therefore does not represent a sequential split. Chain
@@ -154,3 +162,16 @@ output.
 ## License
 
 Dual-licensed under MIT or Apache-2.0.
+
+### Active treasury
+
+`try_simulate_successful_swap` keeps treasury fees in trading reserves and
+assumes zero partner share. Use `try_simulate_successful_swap_with_fee_accounting`
+with the exact router's `FeeAccountingState` for a partner route. Only net output
+plus credited floor-rounded partner fees leave the output reserve.
+
+`OrderBookState.fee_accounting` is the shared context for stateful books and
+`try_validate_fee_accounting_capacity(&state, &config)`. Reserves already include
+treasury; bucket headroom uses anchor-valued total signed input, not initial
+output reserves. The declared Solidity overlay and corpus manifest pin this
+0.5.0 combination independently of the clean cubic-punishment oracle base.

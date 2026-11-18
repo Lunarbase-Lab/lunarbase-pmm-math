@@ -1,5 +1,5 @@
 use alloy::primitives::{aliases::U160, B256};
-use eyre::{ContextCompat, Result};
+use eyre::{Context, ContextCompat, Result};
 use lunarbase_pmm_math::{PoolParams, U256};
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +21,7 @@ pub struct PoolState {
     pub reserve_x: u128,
     pub reserve_y: u128,
     pub max_punishment_x24: u32,
+    pub max_decay_multiplier_x24: u64,
     #[allow(dead_code)]
     pub block_delay: u64,
     #[allow(dead_code)]
@@ -46,11 +47,15 @@ impl PoolState {
             reserve_x: self.reserve_x,
             reserve_y: self.reserve_y,
             max_punishment_x24: self.max_punishment_x24,
+            max_decay_multiplier_x24: self.max_decay_multiplier_x24,
+            current_block: self.snapshot_block,
+            latest_update_block: self.latest_update_block,
+            block_delay: self.block_delay,
         }
     }
 
     pub fn is_fresh(&self) -> bool {
-        self.snapshot_block < self.latest_update_block.saturating_add(self.block_delay)
+        self.to_params().is_fresh()
     }
 
     pub fn block_age(&self) -> u64 {
@@ -68,6 +73,7 @@ impl PoolState {
             reserve_x: self.reserve_x.to_string(),
             reserve_y: self.reserve_y.to_string(),
             max_punishment_x24: self.max_punishment_x24,
+            max_decay_multiplier_x24: self.max_decay_multiplier_x24.to_string(),
             block_delay: self.block_delay,
             paused: self.paused,
             caller_whitelisted: self.caller_whitelisted,
@@ -107,6 +113,10 @@ impl PoolState {
             reserve_x,
             reserve_y,
             max_punishment_x24: payload.max_punishment_x24,
+            max_decay_multiplier_x24: payload
+                .max_decay_multiplier_x24
+                .parse::<u64>()
+                .context("cached maxDecayMultiplierX24 is not a valid uint64")?,
             block_delay: payload.block_delay,
             paused: payload.paused,
             fee_multiplier,
@@ -133,6 +143,8 @@ pub struct CanonicalSnapshotPayload {
     pub reserve_x: String,
     pub reserve_y: String,
     pub max_punishment_x24: u32,
+    /// Decimal text preserves uint64 when the JSON is consumed by JavaScript.
+    pub max_decay_multiplier_x24: String,
     pub block_delay: u64,
     pub paused: bool,
     pub caller_whitelisted: bool,
@@ -177,6 +189,7 @@ mod tests {
             reserve_x: 13,
             reserve_y: 14,
             max_punishment_x24: 15,
+            max_decay_multiplier_x24: 3 * (1 << 24),
             block_delay: 20,
             paused: false,
             fee_multiplier: U256::from(999u64),
@@ -192,6 +205,29 @@ mod tests {
     }
 
     #[test]
+    fn canonical_payload_preserves_the_full_uint64_decay_multiplier_as_text() {
+        let state = PoolState {
+            snapshot_block: 1,
+            latest_update_block: 1,
+            block_delay: 10,
+            max_decay_multiplier_x24: u64::MAX,
+            blacklist_fee_multiplier: U256::from(1),
+            ..PoolState::default()
+        };
+        let json = serde_json::to_value(state.to_payload()).unwrap();
+        assert_eq!(json["maxDecayMultiplierX24"], "18446744073709551615");
+        let mut payload: CanonicalSnapshotPayload = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            PoolState::from_payload(&payload)
+                .unwrap()
+                .max_decay_multiplier_x24,
+            u64::MAX
+        );
+        payload.max_decay_multiplier_x24 = "18446744073709551616".to_owned();
+        assert!(PoolState::from_payload(&payload).is_err());
+    }
+
+    #[test]
     fn canonical_payload_rejects_corrupt_solidity_widths() {
         let payload = CanonicalSnapshotPayload {
             snapshot_block: 1,
@@ -204,6 +240,7 @@ mod tests {
             reserve_x: "1".to_owned(),
             reserve_y: "1".to_owned(),
             max_punishment_x24: 0,
+            max_decay_multiplier_x24: "0".to_owned(),
             block_delay: 1,
             paused: false,
             caller_whitelisted: false,
@@ -225,6 +262,7 @@ mod tests {
             reserve_x: 1,
             reserve_y: 1,
             max_punishment_x24: 0,
+            max_decay_multiplier_x24: 0,
             block_delay: 1,
             paused: false,
             fee_multiplier: U256::from(1u64),

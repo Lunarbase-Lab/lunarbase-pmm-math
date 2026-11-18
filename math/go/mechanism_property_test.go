@@ -101,6 +101,7 @@ func TestPropertyQuotesMatchBigIntOracle(t *testing.T) {
 		feeBid := uint32(rng.Uint64() % uint64(Q24Scale))
 		multiplier := randomMultiplier(rng, i)
 		params := &PoolParams{
+			BlockDelay:       1,
 			SqrtPriceX96:     anchor,
 			FeeAskX24:        feeAsk,
 			FeeBidX24:        feeBid,
@@ -165,9 +166,15 @@ func oracleDesiredPunishment(params *PoolParams, amountIn *uint256.Int, directio
 	}
 	calculated := new(big.Int).Set(maximum)
 	if swapWealth.Cmp(inventory) < 0 {
-		calculated.Mul(maximum, swapWealth)
-		calculated.Add(calculated, new(big.Int).Sub(inventory, big.NewInt(1)))
-		calculated.Quo(calculated, inventory)
+		ratioScale := new(big.Int).Lsh(big.NewInt(1), 48)
+		ratio := new(big.Int).Mul(swapWealth, ratioScale)
+		ratio.Add(ratio, new(big.Int).Sub(inventory, big.NewInt(1)))
+		ratio.Quo(ratio, inventory)
+		ratioCubed := new(big.Int).Exp(ratio, big.NewInt(3), nil)
+		denominator := new(big.Int).Lsh(big.NewInt(1), 144)
+		calculated.Mul(maximum, ratioCubed)
+		calculated.Add(calculated, new(big.Int).Sub(denominator, big.NewInt(1)))
+		calculated.Quo(calculated, denominator)
 	}
 	if calculated.Cmp(oracleQ24) >= 0 {
 		return MaxUint24
@@ -183,6 +190,7 @@ func TestPropertyDesiredPunishmentMatchesBigIntOracle(t *testing.T) {
 			maximum = MaxUint24
 		}
 		params := &PoolParams{
+			BlockDelay:       1,
 			SqrtPriceX96:     randomAnchor(rng, i),
 			FeeAskX24:        uint32(rng.Uint64() % uint64(Q24Scale)),
 			FeeBidX24:        uint32(rng.Uint64() % uint64(Q24Scale)),

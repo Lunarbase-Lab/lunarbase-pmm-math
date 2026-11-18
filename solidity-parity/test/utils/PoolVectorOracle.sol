@@ -68,7 +68,7 @@ contract PoolPunishmentVectorHarness {
     }
 }
 
-/// @dev Shared real-Pool execution and JSONL v4 serialization for parity vectors.
+/// @dev Shared real-Pool execution and JSONL v5 serialization for parity vectors.
 abstract contract PoolVectorOracle is Test {
     uint160 internal constant Q96 = uint160(1 << 96);
     uint256 internal constant Q24 = 1 << 24;
@@ -82,7 +82,8 @@ abstract contract PoolVectorOracle is Test {
         Applied,
         SwapImpossible,
         ReserveTransitionOverflow,
-        MathMulDivRevert
+        MathMulDivRevert,
+        StalePrice
     }
 
     struct VectorInput {
@@ -93,6 +94,9 @@ abstract contract PoolVectorOracle is Test {
         uint112 reserveX;
         uint112 reserveY;
         uint24 maxPunishmentX24;
+        uint64 maxDecayMultiplierX24;
+        uint48 age;
+        uint48 blockDelay;
         uint256 feeMultiplier;
         uint256 amountIn;
     }
@@ -171,6 +175,7 @@ abstract contract PoolVectorOracle is Test {
         uint24 updateFeeBidX24
     ) private returns (VectorOutput memory output, UpdateOutput memory update) {
         require(input.feeMultiplier > 0, "fee multiplier must be nonzero");
+        vm.roll(1000);
 
         address[] memory operators = new address[](1);
         operators[0] = VECTOR_OPERATOR;
@@ -181,7 +186,10 @@ abstract contract PoolVectorOracle is Test {
         pool.syncState();
 
         vm.prank(VECTOR_OPERATOR);
-        pool.upd(input.anchorPrice, input.feeAskX24, input.feeBidX24);
+        pool.upd(input.anchorPrice, input.feeAskX24, input.feeBidX24, block.number);
+        pool.setBlockDelay(input.blockDelay);
+        pool.setMaxDecayMultiplierX24(input.maxDecayMultiplierX24);
+        vm.roll(1000 + uint256(input.age));
         pool.setMaxPunishmentX24(input.maxPunishmentX24);
         pool.setBlacklistFeeMultiplier(input.feeMultiplier);
         pool.unpause();
@@ -213,7 +221,7 @@ abstract contract PoolVectorOracle is Test {
         // The production quote computes this increment before pricing and
         // saturating the current directional fee. Record it even when the
         // resulting zero-output swap is rejected and cannot persist state.
-        output.desiredPunishmentX24 = punishmentHarness.punishmentX24(
+        output.desiredPunishmentX24 = input.age > input.blockDelay ? 0 : punishmentHarness.punishmentX24(
             input.anchorPrice, input.amountIn, input.reserveX, input.reserveY, input.maxPunishmentX24, input.xToY
         );
         uint24 storedFeeX24 = input.xToY ? input.feeBidX24 : input.feeAskX24;
@@ -233,8 +241,13 @@ abstract contract PoolVectorOracle is Test {
             try pool.swapExactIn(params) returns (uint256) {
                 revert("expected SwapImpossible");
             } catch (bytes memory reason) {
-                _assertExactSelector(reason, IPoolErrors.SwapImpossible.selector, 4);
-                output.outcome = VectorOutcome.SwapImpossible;
+                if (input.age > input.blockDelay) {
+                    _assertExactSelector(reason, IPoolErrors.StalePrice.selector, 4);
+                    output.outcome = VectorOutcome.StalePrice;
+                } else {
+                    _assertExactSelector(reason, IPoolErrors.SwapImpossible.selector, 4);
+                    output.outcome = VectorOutcome.SwapImpossible;
+                }
             }
         } else {
             inputToken.mint(address(this), input.amountIn);
@@ -301,7 +314,7 @@ abstract contract PoolVectorOracle is Test {
         uint24 directionalFeeAfter = input.xToY ? output.feeBidX24After : output.feeAskX24After;
         assertEq(directionalFeeAfter, output.effectiveFeeX24, "successful swap did not persist quote fee");
 
-        uint256 grossOutput = output.amountOut + output.feeAmount;
+        uint256 reserveDebit = output.amountOut; // Treasury stays in active reserves.
         if (input.xToY) {
             assertEq(output.feeAskX24After, input.feeAskX24, "X to Y changed ask fee");
             assertEq(
@@ -311,14 +324,14 @@ abstract contract PoolVectorOracle is Test {
             );
             assertEq(
                 uint256(output.reserveYAfter),
-                uint256(input.reserveY) - grossOutput,
+                uint256(input.reserveY) - reserveDebit,
                 "unexpected Y reserve after X to Y"
             );
         } else {
             assertEq(output.feeBidX24After, input.feeBidX24, "Y to X changed bid fee");
             assertEq(
                 uint256(output.reserveXAfter),
-                uint256(input.reserveX) - grossOutput,
+                uint256(input.reserveX) - reserveDebit,
                 "unexpected X reserve after Y to X"
             );
             assertEq(
@@ -350,7 +363,7 @@ abstract contract PoolVectorOracle is Test {
         uint112 reserveXBefore = pool.getXReserve();
         uint112 reserveYBefore = pool.getYReserve();
         vm.prank(VECTOR_OPERATOR);
-        pool.upd(updateAnchorPrice, updateFeeAskX24, updateFeeBidX24);
+        pool.upd(updateAnchorPrice, updateFeeAskX24, updateFeeBidX24, block.number);
 
         (update.anchorPriceAfter, update.feeAskX24After, update.feeBidX24After,) = pool.state();
         update.reserveXAfter = pool.getXReserve();
@@ -424,9 +437,14 @@ abstract contract PoolVectorOracle is Test {
         VectorOutput memory output,
         UpdateOutput memory update
     ) private pure returns (string memory json) {
-        json = string.concat('{"schemaVersion":4,"', identityKey, '":"', identityValue, '","dir":"');
+        json = string.concat('{"schemaVersion":6,"', identityKey, '":"', identityValue, '","dir":"');
         json = string.concat(json, input.xToY ? "xToY" : "yToX", '"');
         json = string.concat(json, _serializeInputA(input), _serializeInputB(input));
+        json = string.concat(json,
+            _uintField("maxDecayMultiplierX24", input.maxDecayMultiplierX24),
+            _uintField("currentBlock", 1000 + uint256(input.age)),
+            _uintField("latestUpdateBlock", 1000),
+            _uintField("blockDelay", input.blockDelay));
         json = string.concat(json, _serializeQuote(output), _serializeTransitionA(output));
         json = string.concat(json, _serializeTransitionB(output));
         if (update.enabled) json = string.concat(json, _serializeUpdate(update));
@@ -508,6 +526,7 @@ abstract contract PoolVectorOracle is Test {
     }
 
     function _outcomeString(VectorOutcome outcome) private pure returns (string memory) {
+        if (outcome == VectorOutcome.StalePrice) return "StalePrice";
         if (outcome == VectorOutcome.Applied) return "Applied";
         if (outcome == VectorOutcome.SwapImpossible) return "SwapImpossible";
         if (outcome == VectorOutcome.ReserveTransitionOverflow) return "ReserveTransitionOverflow";
@@ -515,6 +534,7 @@ abstract contract PoolVectorOracle is Test {
     }
 
     function _revertSelectorString(VectorOutcome outcome) private pure returns (string memory) {
+        if (outcome == VectorOutcome.StalePrice) return "0x19abf40e";
         if (outcome == VectorOutcome.Applied) return "0x00000000";
         if (outcome == VectorOutcome.SwapImpossible) return "0x4a45e749";
         if (outcome == VectorOutcome.ReserveTransitionOverflow) return "0x6dfcc650";
@@ -522,6 +542,7 @@ abstract contract PoolVectorOracle is Test {
     }
 
     function _revertClassString(VectorOutcome outcome) private pure returns (string memory) {
+        if (outcome == VectorOutcome.StalePrice) return "StalePrice()";
         if (outcome == VectorOutcome.Applied) return "None";
         if (outcome == VectorOutcome.SwapImpossible) return "SwapImpossible()";
         if (outcome == VectorOutcome.ReserveTransitionOverflow) {

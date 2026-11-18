@@ -11,12 +11,16 @@ import (
 
 func clonePool(params *PoolParams) *PoolParams {
 	return &PoolParams{
-		SqrtPriceX96:     new(uint256.Int).Set(params.SqrtPriceX96),
-		FeeAskX24:        params.FeeAskX24,
-		FeeBidX24:        params.FeeBidX24,
-		ReserveX:         new(uint256.Int).Set(params.ReserveX),
-		ReserveY:         new(uint256.Int).Set(params.ReserveY),
-		MaxPunishmentX24: params.MaxPunishmentX24,
+		BlockDelay:            params.BlockDelay,
+		CurrentBlock:          params.CurrentBlock,
+		LatestUpdateBlock:     params.LatestUpdateBlock,
+		MaxDecayMultiplierX24: params.MaxDecayMultiplierX24,
+		SqrtPriceX96:          new(uint256.Int).Set(params.SqrtPriceX96),
+		FeeAskX24:             params.FeeAskX24,
+		FeeBidX24:             params.FeeBidX24,
+		ReserveX:              new(uint256.Int).Set(params.ReserveX),
+		ReserveY:              new(uint256.Int).Set(params.ReserveY),
+		MaxPunishmentX24:      params.MaxPunishmentX24,
 	}
 }
 
@@ -28,6 +32,10 @@ func assertPoolEqual(t *testing.T, expected, actual *PoolParams) {
 	assert.Equal(t, expected.ReserveX, actual.ReserveX)
 	assert.Equal(t, expected.ReserveY, actual.ReserveY)
 	assert.Equal(t, expected.MaxPunishmentX24, actual.MaxPunishmentX24)
+	assert.Equal(t, expected.MaxDecayMultiplierX24, actual.MaxDecayMultiplierX24)
+	assert.Equal(t, expected.CurrentBlock, actual.CurrentBlock)
+	assert.Equal(t, expected.LatestUpdateBlock, actual.LatestUpdateBlock)
+	assert.Equal(t, expected.BlockDelay, actual.BlockDelay)
 }
 
 func TestDesiredPunishmentUsesPreSwapWealthAndCeil(t *testing.T) {
@@ -38,11 +46,11 @@ func TestDesiredPunishmentUsesPreSwapWealthAndCeil(t *testing.T) {
 
 	xToY, err := DesiredPunishmentX24(params, uint256.NewInt(100), DirectionXToY)
 	require.NoError(t, err)
-	assert.Equal(t, uint32(500), xToY)
+	assert.Equal(t, uint32(125), xToY)
 
 	yToX, err := DesiredPunishmentX24(params, uint256.NewInt(1), DirectionYToX)
 	require.NoError(t, err)
-	assert.Equal(t, uint32(5), yToX)
+	assert.Equal(t, uint32(1), yToX)
 
 	params.MaxPunishmentX24 = 1
 	minimum, err := DesiredPunishmentX24(params, uint256.NewInt(1), DirectionXToY)
@@ -58,7 +66,7 @@ func TestDesiredPunishmentConceptualQ24Sentinel(t *testing.T) {
 
 	oneThird, err := DesiredPunishmentX24(params, uint256.NewInt(100), DirectionXToY)
 	require.NoError(t, err)
-	assert.Equal(t, uint32(5_592_406), oneThird)
+	assert.Equal(t, uint32(621_379), oneThird)
 
 	saturated, err := DesiredPunishmentX24(params, uint256.NewInt(300), DirectionYToX)
 	require.NoError(t, err)
@@ -89,16 +97,16 @@ func TestQuoteChargesImmediatePunishmentWithoutMutatingState(t *testing.T) {
 
 	quote, err := QuoteXToYChecked(params, uint256.NewInt(1_000_000))
 	require.NoError(t, err)
-	assert.Equal(t, uint256.NewInt(940_000), quote.AmountOut)
-	assert.Equal(t, uint256.NewInt(60_000), quote.Fee, "stored fee and triggering punishment must both be charged")
-	assert.Equal(t, uint32(Q24Scale/100+838_861), quote.EffectiveFeeX24)
+	assert.Equal(t, uint256.NewInt(977_500), quote.AmountOut)
+	assert.Equal(t, uint256.NewInt(22_500), quote.Fee, "stored fee and triggering punishment must both be charged")
+	assert.Equal(t, uint32(Q24Scale/100+209_716), quote.EffectiveFeeX24)
 	assert.Equal(t, params.SqrtPriceX96, quote.SqrtPriceNext)
 	assertPoolEqual(t, before, params)
 
 	multiplied, err := QuoteXToYWithMultiplierChecked(params, uint256.NewInt(1_000_000), uint256.NewInt(3))
 	require.NoError(t, err)
-	assert.Equal(t, uint256.NewInt(820_000), multiplied.AmountOut)
-	assert.Equal(t, uint256.NewInt(180_000), multiplied.Fee, "multiplier must apply to the effective fee")
+	assert.Equal(t, uint256.NewInt(932_500), multiplied.AmountOut)
+	assert.Equal(t, uint256.NewInt(67_500), multiplied.Fee, "multiplier must apply to the effective fee")
 	assertPoolEqual(t, before, params)
 }
 
@@ -110,25 +118,25 @@ func TestSimulateStandardTokenSwapTransitionsFeesAndReserves(t *testing.T) {
 
 	first, err := SimulateStandardTokenSwap(params, uint256.NewInt(1_000_000), DirectionXToY)
 	require.NoError(t, err)
-	assert.Equal(t, uint256.NewInt(950_000), first.AmountOut)
-	assert.Equal(t, uint256.NewInt(50_000), first.Fee)
-	assert.Equal(t, uint32(838_861), first.EffectiveFeeX24)
+	assert.Equal(t, uint256.NewInt(987_500), first.AmountOut)
+	assert.Equal(t, uint256.NewInt(12_500), first.Fee)
+	assert.Equal(t, uint32(209_716), first.EffectiveFeeX24)
 	assert.Equal(t, params.SqrtPriceX96, first.SqrtPriceNext)
-	assert.Equal(t, uint32(838_861), first.DesiredPunishmentX24)
-	assert.Equal(t, uint32(838_861), first.AppliedPunishmentX24)
+	assert.Equal(t, uint32(209_716), first.DesiredPunishmentX24)
+	assert.Equal(t, uint32(209_716), first.AppliedPunishmentX24)
 	assert.Equal(t, uint32(0), params.FeeAskX24)
-	assert.Equal(t, uint32(838_861), params.FeeBidX24)
+	assert.Equal(t, uint32(209_716), params.FeeBidX24)
 	assert.Equal(t, uint256.NewInt(2_000_000), params.ReserveX)
-	assert.True(t, params.ReserveY.IsZero())
+	assert.Equal(t, uint256.NewInt(12_500), params.ReserveY)
 
 	second, err := SimulateStandardTokenSwap(params, uint256.NewInt(1_000_000), DirectionYToX)
 	require.NoError(t, err)
-	assert.Equal(t, uint256.NewInt(950_000), second.AmountOut)
-	assert.Equal(t, uint256.NewInt(50_000), second.Fee)
-	assert.Equal(t, uint32(838_861), params.FeeAskX24)
-	assert.Equal(t, uint32(838_861), params.FeeBidX24, "opposite direction does not net bid punishment")
-	assert.Equal(t, uint256.NewInt(1_000_000), params.ReserveX)
-	assert.Equal(t, uint256.NewInt(1_000_000), params.ReserveY)
+	assert.Equal(t, uint256.NewInt(987_732), second.AmountOut)
+	assert.Equal(t, uint256.NewInt(12_268), second.Fee)
+	assert.Equal(t, uint32(205_832), params.FeeAskX24)
+	assert.Equal(t, uint32(209_716), params.FeeBidX24, "opposite direction does not net bid punishment")
+	assert.Equal(t, uint256.NewInt(1_012_268), params.ReserveX)
+	assert.Equal(t, uint256.NewInt(1_012_500), params.ReserveY)
 }
 
 func TestFullImmediatePunishmentSplitRegressionMatchesSolidity(t *testing.T) {
@@ -146,8 +154,8 @@ func TestFullImmediatePunishmentSplitRegressionMatchesSolidity(t *testing.T) {
 		DirectionXToY,
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "500000000000000000000000", single.AmountOut.Dec())
-	assert.Equal(t, uint32(8_388_608), singleState.FeeBidX24)
+	assert.Equal(t, "875000000000000000000000", single.AmountOut.Dec())
+	assert.Equal(t, uint32(2_097_152), singleState.FeeBidX24)
 
 	splitState := clonePool(base)
 	splitTotalOut := new(uint256.Int)
@@ -158,12 +166,12 @@ func TestFullImmediatePunishmentSplitRegressionMatchesSolidity(t *testing.T) {
 		splitTotalOut.Add(splitTotalOut, step.AmountOut)
 	}
 
-	assert.Equal(t, "724999934434890747070315", splitTotalOut.Dec())
-	assert.Equal(t, uint32(8_388_610), splitState.FeeBidX24)
+	assert.Equal(t, "999312406778335571289065", splitTotalOut.Dec())
+	assert.Equal(t, uint32(20_971), splitState.FeeBidX24)
 	assert.True(t, splitTotalOut.Gt(single.AmountOut))
 }
 
-func TestSimulationRemovesGrossOutputFromActiveReserve(t *testing.T) {
+func TestSimulationRetainsTreasuryInActiveReserve(t *testing.T) {
 	params := testPool()
 	params.ReserveX.SetUint64(1000)
 	params.ReserveY.SetUint64(1000)
@@ -174,7 +182,7 @@ func TestSimulationRemovesGrossOutputFromActiveReserve(t *testing.T) {
 	assert.Equal(t, uint256.NewInt(91), result.AmountOut)
 	assert.Equal(t, uint256.NewInt(9), result.Fee)
 	assert.Equal(t, uint256.NewInt(1100), params.ReserveX)
-	assert.Equal(t, uint256.NewInt(900), params.ReserveY, "active reserve excludes the retained fee bucket")
+	assert.Equal(t, uint256.NewInt(909), params.ReserveY, "treasury remains in the trading reserve")
 }
 
 func TestSimulationReturnsStructuredRollbackState(t *testing.T) {
@@ -217,7 +225,7 @@ func TestSimulationReturnsStructuredRollbackState(t *testing.T) {
 		params := testPool()
 		params.ReserveX.SetUint64(100)
 		params.ReserveY.SetUint64(100)
-		params.FeeBidX24 = MaxUint24 - 5
+		params.FeeBidX24 = MaxUint24 - 1
 		params.MaxPunishmentX24 = 1000
 		before := clonePool(params)
 
@@ -233,7 +241,7 @@ func TestSimulationReturnsStructuredRollbackState(t *testing.T) {
 		assert.Equal(t, quote.AmountOut, result.AmountOut)
 		assert.Equal(t, quote.Fee, result.Fee)
 		assert.Equal(t, quote.EffectiveFeeX24, result.EffectiveFeeX24)
-		assert.Equal(t, uint32(5), result.DesiredPunishmentX24)
+		assert.Equal(t, uint32(1), result.DesiredPunishmentX24)
 		assert.Zero(t, result.AppliedPunishmentX24)
 		assertPoolEqual(t, before, params)
 	})

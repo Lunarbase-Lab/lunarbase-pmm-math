@@ -5,8 +5,8 @@
 use core::fmt;
 
 use crate::{
-    FillPolicyError, OrderBookState, ValidatedOrderBookConfig, MAX_U112,
-    MAX_VALIDATION_TRANSITIONS, U256,
+    FillPolicyError, OrderBookState, U256Ext, ValidatedOrderBookConfig, MAX_U112,
+    MAX_VALIDATION_TRANSITIONS, Q96, U256,
 };
 
 /// Pool denominator for the configured partner share (100%).
@@ -58,14 +58,13 @@ pub enum FeeAccountingError {
     Policy(FillPolicyError),
     /// Partner share exceeds the Pool's 1e6 denominator.
     InvalidPartnerFee,
-    /// Positive partner share without operator skips credit and invalidates
-    /// the model's full-gross reserve debit assumption.
+    /// Positive partner share without an operator leaves part of the fee uncredited.
     MissingPartnerOperator,
     /// A supplied bucket is outside its on-chain uint112 width.
     InvalidBucketWidth(FeeBucket),
     /// Conservative additional fees do not fit the named uint112 bucket.
     CapacityExceeded(FeeBucket),
-    /// Even a uint256 cannot contain reserve plus signed same-token input.
+    /// The anchor-valued cumulative input does not fit uint256.
     BoundOverflow,
 }
 
@@ -82,35 +81,31 @@ impl fmt::Display for FeeAccountingError {
                 f,
                 "{bucket:?} fee bucket lacks conservative uint112 headroom"
             ),
-            Self::BoundOverflow => f.write_str("reserve plus signed input overflows uint256"),
+            Self::BoundOverflow => f.write_str("anchor-valued signed input exceeds uint256"),
         }
     }
 }
 
 impl std::error::Error for FeeAccountingError {}
 
-/// Check conditions needed for fully credited fees and accounting headroom.
+/// Check coherent fee configuration and conservative uint112 bucket headroom.
 ///
-/// For each token paid as output by an enabled direction, cumulative charged
-/// fees are bounded by its initial active reserve plus all signed input of that
-/// SAME token. Output and fees cannot consume more tokens than this budget in
-/// the standard-token, fully credited model. Every relevant fee bucket must
-/// have that much headroom; this deliberately overestimates the actual fee
-/// share. A disabled output direction contributes zero. Existing buckets are
-/// always width-checked, including when their configured share is zero.
-///
-/// This is conservative and may reject feasible books near bucket limits. It
-/// assumes no external swaps, fee/config changes or concurrently live quote
-/// generations beyond `config`. Together with the certified price model it
-/// still cannot guarantee arbitrary ERC20 calls, permissions, or EVM execution.
-/// Initial stored reserves must already reconcile with token balances minus
-/// pending-deposit escrow and global fee buckets; this helper cannot detect an
-/// unsynced donation or another raw-balance discrepancy.
+/// Treasury remains tradable, so cumulative fees can exceed initial output
+/// reserves. Bound X fees by the anchor-valued signed Y-input cap and Y fees
+/// by the signed X-input cap, using Solidity's nested floor conversions. Each
+/// enabled bucket must have room for this deliberately conservative full-fee
+/// bound. Disabled directions and zero shares add zero; every supplied bucket
+/// is width-checked. Standard tokens and unchanged external Pool state are
+/// required. Stored reserves include treasury and exclude pending deposits and
+/// credited partner fees; this helper cannot detect unsynced raw balances.
 pub fn try_validate_fee_accounting_capacity(
     state: &OrderBookState,
     config: &ValidatedOrderBookConfig,
-    accounting: &FeeAccountingState,
 ) -> Result<(), FeeAccountingError> {
+    let accounting = &state.fee_accounting;
+    if accounting.partner_fee > PARTNER_FEE_SCALE {
+        return Err(FeeAccountingError::InvalidPartnerFee);
+    }
     state
         .validate()
         .map_err(|error| FeeAccountingError::Policy(error.into()))?;
@@ -120,22 +115,27 @@ pub fn try_validate_fee_accounting_capacity(
     for policy in [config.x_to_y, config.y_to_x].iter().flatten() {
         policy.validate().map_err(FeeAccountingError::Policy)?;
     }
-    if accounting.partner_fee > PARTNER_FEE_SCALE {
-        return Err(FeeAccountingError::InvalidPartnerFee);
-    }
     if accounting.partner_fee != 0 && !accounting.partner_operator_present {
         return Err(FeeAccountingError::MissingPartnerOperator);
     }
-    let budget = |output_enabled: bool, reserve: u128, input: Option<crate::FillPolicy>| {
-        if !output_enabled {
-            return Ok(U256::ZERO);
-        }
-        U256::from(reserve)
-            .checked_add(input.map_or(U256::ZERO, |policy| policy.total_input))
-            .ok_or(FeeAccountingError::BoundOverflow)
+    // Treasury fees can reuse the same retained assets across fills. Cumulative
+    // fees therefore cannot be bounded by initial output reserves. Bound them
+    // by the anchor-valued TOTAL signed input of the opposite token instead.
+    let input_x = config
+        .x_to_y
+        .map_or(U256::ZERO, |policy| policy.total_input);
+    let input_y = config
+        .y_to_x
+        .map_or(U256::ZERO, |policy| policy.total_input);
+    let bound_y = crate::try_x_value_in_y(input_x, state.pool.sqrt_price_x96)
+        .map_err(|_| FeeAccountingError::BoundOverflow)?;
+    let bound_x = if state.pool.sqrt_price_x96.is_zero() {
+        U256::ZERO
+    } else {
+        U256::checked_mul_div(input_y, Q96, state.pool.sqrt_price_x96)
+            .and_then(|first| U256::checked_mul_div(first, Q96, state.pool.sqrt_price_x96))
+            .ok_or(FeeAccountingError::BoundOverflow)?
     };
-    let bound_x = budget(config.y_to_x.is_some(), state.pool.reserve_x, config.x_to_y)?;
-    let bound_y = budget(config.x_to_y.is_some(), state.pool.reserve_y, config.y_to_x)?;
     let treasury_enabled = accounting.partner_fee < PARTNER_FEE_SCALE;
     let partner_enabled = accounting.partner_fee > 0;
     for (bucket, current, bound, enabled) in [
@@ -194,6 +194,7 @@ mod tests {
     fn inputs() -> (OrderBookState, ValidatedOrderBookConfig) {
         (
             OrderBookState {
+                fee_accounting: crate::FeeAccountingState::default(),
                 pool: PoolParams {
                     sqrt_price_x96: Q96,
                     fee_ask_x24: 1,
@@ -201,12 +202,13 @@ mod tests {
                     reserve_x: 10,
                     reserve_y: 20,
                     max_punishment_x24: 0,
+                    max_decay_multiplier_x24: 0,
+                    current_block: 100,
+                    latest_update_block: 100,
+                    block_delay: 3,
                 },
                 fee_multiplier: U256::from(1),
-                snapshot_block: 100,
                 max_execution_block: 101,
-                latest_update_block: 100,
-                block_delay: 3,
                 paused: false,
             },
             ValidatedOrderBookConfig {
@@ -232,42 +234,72 @@ mod tests {
         let (state, config) = inputs();
         let mut accounting = FeeAccountingState::default();
         assert_eq!(
-            try_validate_fee_accounting_capacity(&state, &config, &accounting),
+            try_validate_fee_accounting_capacity(
+                &OrderBookState {
+                    fee_accounting: accounting,
+                    ..state
+                },
+                &config
+            ),
             Ok(())
         );
         accounting.partner_fee = 1;
         assert_eq!(
-            try_validate_fee_accounting_capacity(&state, &config, &accounting),
+            try_validate_fee_accounting_capacity(
+                &OrderBookState {
+                    fee_accounting: accounting,
+                    ..state
+                },
+                &config
+            ),
             Err(FeeAccountingError::MissingPartnerOperator)
         );
         accounting.partner_operator_present = true;
         assert_eq!(
-            try_validate_fee_accounting_capacity(&state, &config, &accounting),
+            try_validate_fee_accounting_capacity(
+                &OrderBookState {
+                    fee_accounting: accounting,
+                    ..state
+                },
+                &config
+            ),
             Ok(())
         );
         accounting.partner_fee = PARTNER_FEE_SCALE + 1;
         assert_eq!(
-            try_validate_fee_accounting_capacity(&state, &config, &accounting),
+            try_validate_fee_accounting_capacity(
+                &OrderBookState {
+                    fee_accounting: accounting,
+                    ..state
+                },
+                &config
+            ),
             Err(FeeAccountingError::InvalidPartnerFee)
         );
     }
 
     #[test]
-    fn includes_same_token_input_and_checks_every_relevant_bucket() {
+    fn bounds_opposite_token_input_and_checks_every_relevant_bucket() {
         let (state, config) = inputs();
-        // X bound=10+4; Y bound=20+6, regardless of output amounts or split.
+        // At unit price: X fees are bounded by total Y input (6), Y fees by total X input (4).
         let exact = FeeAccountingState {
             partner_fee: PARTNER_FEE_SCALE / 2,
             partner_operator_present: true,
-            treasury_x: MAX_U112 - 14,
-            treasury_y: MAX_U112 - 26,
-            partner_x: MAX_U112 - 14,
-            partner_y: MAX_U112 - 26,
-            router_partner_x: MAX_U112 - 14,
-            router_partner_y: MAX_U112 - 26,
+            treasury_x: MAX_U112 - 6,
+            treasury_y: MAX_U112 - 4,
+            partner_x: MAX_U112 - 6,
+            partner_y: MAX_U112 - 4,
+            router_partner_x: MAX_U112 - 6,
+            router_partner_y: MAX_U112 - 4,
         };
         assert_eq!(
-            try_validate_fee_accounting_capacity(&state, &config, &exact),
+            try_validate_fee_accounting_capacity(
+                &OrderBookState {
+                    fee_accounting: exact,
+                    ..state
+                },
+                &config
+            ),
             Ok(())
         );
         for bucket in [
@@ -288,7 +320,13 @@ mod tests {
                 FeeBucket::RouterPartnerY => insufficient.router_partner_y += 1,
             }
             assert_eq!(
-                try_validate_fee_accounting_capacity(&state, &config, &insufficient),
+                try_validate_fee_accounting_capacity(
+                    &OrderBookState {
+                        fee_accounting: insufficient,
+                        ..state
+                    },
+                    &config
+                ),
                 Err(FeeAccountingError::CapacityExceeded(bucket))
             );
         }
@@ -307,12 +345,24 @@ mod tests {
             ..FeeAccountingState::default()
         };
         assert_eq!(
-            try_validate_fee_accounting_capacity(&state, &config, &accounting),
+            try_validate_fee_accounting_capacity(
+                &OrderBookState {
+                    fee_accounting: accounting,
+                    ..state
+                },
+                &config
+            ),
             Ok(())
         );
         accounting.partner_y = MAX_U112 + 1;
         assert_eq!(
-            try_validate_fee_accounting_capacity(&state, &config, &accounting),
+            try_validate_fee_accounting_capacity(
+                &OrderBookState {
+                    fee_accounting: accounting,
+                    ..state
+                },
+                &config
+            ),
             Err(FeeAccountingError::InvalidBucketWidth(FeeBucket::PartnerY))
         );
         accounting = FeeAccountingState {
@@ -323,7 +373,13 @@ mod tests {
             ..FeeAccountingState::default()
         };
         assert_eq!(
-            try_validate_fee_accounting_capacity(&state, &config, &accounting),
+            try_validate_fee_accounting_capacity(
+                &OrderBookState {
+                    fee_accounting: accounting,
+                    ..state
+                },
+                &config
+            ),
             Ok(())
         );
     }

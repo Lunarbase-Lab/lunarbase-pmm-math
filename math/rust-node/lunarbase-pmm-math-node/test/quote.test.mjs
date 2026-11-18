@@ -24,6 +24,26 @@ const {
   sqrt_price_x96_to_price,
 } = binding;
 
+describe("active treasury reserve accounting", () => {
+  const fees = { partnerFee: 0, partnerOperatorPresent: true, treasuryX: "0", treasuryY: "0",
+    partnerX: "0", partnerY: "0", routerPartnerX: "0", routerPartnerY: "0" };
+  it("retains treasury and removes only credited partner fees in both directions", () => {
+    const params = { sqrtPriceX96: "79228162514264337593543950336", feeAskX24: 1677721, feeBidX24: 1677721,
+      reserveX: "1000000", reserveY: "1000000", maxPunishmentX24: 167772,
+      maxDecayMultiplierX24: "0", currentBlock: "100", latestUpdateBlock: "100", blockDelay: "3",
+      feeMultiplier: "1", amountIn: "100003" };
+    for (const [simulate, reserve] of [[simulateXToY,"reserveYAfter"],[simulateYToX,"reserveXAfter"]]) {
+      for (const share of [0,1,333333,500000,1000000]) {
+        for (const present of [false,true]) {
+          const result = simulate(params,{ ...fees,partnerFee:share,partnerOperatorPresent:present });
+          const partner = present ? BigInt(result.fee)*BigInt(share)/1000000n : 0n;
+          assert.equal(BigInt(result[reserve]),1000000n-BigInt(result.amountOut)-partner);
+        }
+      }
+    }
+  });
+});
+
 function activeOrderBookParams(overrides = {}) {
   return {
     sqrtPriceX96: "79228162514264337593543950336",
@@ -32,6 +52,7 @@ function activeOrderBookParams(overrides = {}) {
     reserveX: "1000000",
     reserveY: "1000000",
     maxPunishmentX24: 0,
+    maxDecayMultiplierX24: "0",
     feeMultiplier: "1",
     snapshotBlock: "100",
     maxExecutionBlock: "101",
@@ -70,7 +91,7 @@ describe("order-book builder", () => {
     assert.deepEqual(paused.xToY.levels, []);
     assert.deepEqual(paused.yToX.levels, []);
 
-    const stale = buildOrderBook(activeOrderBookParams({ maxExecutionBlock: "102" }));
+    const stale = buildOrderBook(activeOrderBookParams({ maxExecutionBlock: "103" }));
     assert.equal(stale.status, OrderBookStatus.Stale);
     assert.deepEqual(stale.xToY.levels, []);
   });
@@ -82,7 +103,7 @@ describe("order-book builder", () => {
     );
     assert.throws(
       () => buildOrderBook(activeOrderBookParams({ blockDelay: "0" })),
-      /block_delay must be non-zero/,
+      /block_delay must be in/,
     );
     assert.throws(
       () => buildOrderBook(activeOrderBookParams({ feeMultiplier: "0" })),
@@ -102,27 +123,25 @@ describe("validated order-book policy", () => {
     treasuryX: "0", treasuryY: "0", partnerX: "0", partnerY: "0",
     routerPartnerX: "0", routerPartnerY: "0" };
 
-  it("requires credited fees and bounds treasury/global/router bucket growth", () => {
+  it("requires coherent credited fees and bounds cumulative bucket growth", () => {
     const snapshot = activeOrderBookParams();
-    assert.doesNotThrow(() => validateFeeAccountingCapacity(snapshot, config, accounting));
-    assert.throws(() => validateFeeAccountingCapacity(snapshot, config,
-      { ...accounting, partnerFee: 1 }), /requires an operator/);
+    const validate = (fees) => validateFeeAccountingCapacity({ ...snapshot, feeAccounting: fees }, config);
+    assert.throws(() => validateFeeAccountingCapacity(snapshot, config), /feeAccounting is required/);
+    assert.doesNotThrow(() => validate(accounting));
+    assert.throws(() => validate({ ...accounting, partnerFee: 1 }), /requires an operator/);
     for (const partnerFee of [-1, 1.5, NaN, Infinity, 1000001]) {
-      assert.throws(() => validateFeeAccountingCapacity(snapshot, config,
-        { ...accounting, partnerFee }), /partnerFee must be an integer/);
+      assert.throws(() => validate({ ...accounting, partnerFee }), /partnerFee must be an integer/);
     }
     const maximum = (1n << 112n) - 1n;
-    assert.throws(() => validateFeeAccountingCapacity(snapshot, config,
-      { ...accounting, treasuryY: String(maximum) }), /headroom/);
-    assert.throws(() => validateFeeAccountingCapacity(snapshot, config,
-      { ...accounting, partnerFee: 500000, partnerOperatorPresent: true,
-        routerPartnerX: String(maximum) }), /headroom/);
+    assert.throws(() => validate({ ...accounting, treasuryY: String(maximum) }), /headroom/);
+    assert.throws(() => validate({ ...accounting, partnerFee: 500000, partnerOperatorPresent: true,
+      routerPartnerX: String(maximum) }), /headroom/);
   });
 
   it("certifies and independently replays every mixed-direction fill sequence", () => {
     const snapshot = activeOrderBookParams({ maxPunishmentX24: 1000000, feeBidX24: 1234 });
     const original = structuredClone(snapshot);
-    validateFeeAccountingCapacity(snapshot, config, accounting);
+    validateFeeAccountingCapacity({ ...snapshot, feeAccounting: accounting }, config);
     const result = buildValidatedOrderBook(snapshot, config);
     assert.equal(result.book.safety, OrderBookSafety.ExhaustiveLotPolicy);
     assert.equal(result.book.requiresAmountOutMinimum, true);
@@ -135,7 +154,7 @@ describe("validated order-book policy", () => {
         for (const amount of [10n, 20n]) {
           if (cursors[side] + amount > 30n) continue;
           const promised = ladderAmountOut(result.book[side].levels, String(amount), String(cursors[side]));
-          const actual = simulate({ ...state, amountIn: String(amount) });
+          const actual = simulate({ ...state, currentBlock: state.currentBlock ?? state.snapshotBlock, amountIn: String(amount) });
           assert.equal(actual.status, SwapSimulationStatus.Applied);
           assert.ok(BigInt(promised) > 0n);
           assert.ok(BigInt(promised) <= BigInt(actual.amountOut));
@@ -161,7 +180,7 @@ describe("validated order-book policy", () => {
     assert.equal(paused.book.safety, OrderBookSafety.Indicative);
     assert.equal(paused.checkedStates, 0);
     assert.deepEqual(paused.book.xToY.levels, []);
-    assert.equal(buildValidatedOrderBook({ ...snapshot, maxExecutionBlock: "102" }, config).book.status, OrderBookStatus.Stale);
+    assert.equal(buildValidatedOrderBook({ ...snapshot, maxExecutionBlock: "103" }, config).book.status, OrderBookStatus.Stale);
   });
 
   it("uses exact tranche sums without a lossy VWAP round-trip", () => {
@@ -209,7 +228,7 @@ describe("precise multilevel order-book policy", () => {
     assert.ok(result.worstUnderquoteBps > 0);
     assert.equal(result.validated.book.safety, OrderBookSafety.ExhaustiveLotPolicy);
     const oldApi = buildValidatedOrderBook(snapshot, config);
-    assert.deepEqual(oldApi.book.xToY.levels, [{ size: "200000", price: "950000000000000000" }]);
+    assert.deepEqual(oldApi.book.xToY.levels, [{ size: "200000", price: "999980000000000000" }]);
     // Exact floor-aware fitting can increase the encoded scalar while keeping
     // the same safe delivered amount; the legacy API retains its old chord.
     for (const cursor of ["0", "50000", "100000", "150000"]) {
@@ -231,7 +250,7 @@ describe("precise multilevel order-book policy", () => {
         for (const amount of [50000n, 100000n]) {
           if (cursors[side] + amount > 150000n) continue;
           const promised = BigInt(ladderAmountOut(levels, String(amount), String(cursors[side])));
-          const actual = simulate({ ...state, amountIn: String(amount) });
+          const actual = simulate({ ...state, currentBlock: state.currentBlock ?? state.snapshotBlock, amountIn: String(amount) });
           assert.equal(actual.status, SwapSimulationStatus.Applied);
           assert.ok(promised > 0n && promised <= BigInt(actual.amountOut));
           const key = `${side}:${cursors[side]}:${amount}`;
@@ -240,7 +259,7 @@ describe("precise multilevel order-book policy", () => {
           constraints.set(key, {
             promised,
             minimum: previous && previous.minimum < output ? previous.minimum : output,
-            fresh: BigInt(freshQuote({ ...snapshot, amountIn: String(amount) }).amountOut),
+            fresh: BigInt(freshQuote({ ...snapshot, currentBlock: snapshot.snapshotBlock, amountIn: String(amount) }).amountOut),
           });
           replay({ ...state, reserveX: actual.reserveXAfter, reserveY: actual.reserveYAfter,
             feeAskX24: actual.feeAskX24After, feeBidX24: actual.feeBidX24After },
@@ -274,7 +293,7 @@ describe("precise multilevel order-book policy", () => {
   });
 
   it("never marks a paused or stale snapshot as meeting a precision target", () => {
-    for (const unavailable of [{ ...snapshot, paused: true }, { ...snapshot, maxExecutionBlock: "102" }]) {
+    for (const unavailable of [{ ...snapshot, paused: true }, { ...snapshot, maxExecutionBlock: "103" }]) {
       const result = buildPreciseOrderBook(unavailable, config, precision);
       assert.equal(result.targetMet, false);
       assert.equal(result.validated.book.safety, OrderBookSafety.Indicative);
@@ -294,6 +313,7 @@ const vectorFiles = [
 ];
 
 const INTEGER_FIELDS = [
+  "maxDecayMultiplierX24", "currentBlock", "latestUpdateBlock", "blockDelay",
   "anchorPrice",
   "feeAskX24",
   "feeBidX24",
@@ -340,6 +360,7 @@ const OUTCOME_METADATA = Object.freeze({
     className: "SafeCastOverflowedUintDowncast(uint8,uint256)",
     status: SwapSimulationStatus.ReserveTransitionOverflow,
   },
+  StalePrice: { selector: "0x19abf40e", className: "StalePrice()", status: SwapSimulationStatus.StalePrice },
   MathMulDivRevert: {
     selector: "0x4e487b71",
     className: "Panic(0x11)",
@@ -353,7 +374,7 @@ function assertCanonicalDecimalString(value, label) {
 }
 
 function validateVector(row, label) {
-  assert.equal(row.schemaVersion, 4, `${label}: schemaVersion`);
+  assert.equal(row.schemaVersion, 6, `${label}: schemaVersion`);
   assert.ok(row.dir === "xToY" || row.dir === "yToX", `${label}: dir`);
   if (row.seed !== undefined) assertCanonicalDecimalString(row.seed, `${label}: seed`);
   for (const field of INTEGER_FIELDS) {
@@ -400,6 +421,10 @@ function paramsFromVector(vector) {
     reserveX: vector.reserveX,
     reserveY: vector.reserveY,
     maxPunishmentX24: Number(vector.maxPunishmentX24),
+    maxDecayMultiplierX24: vector.maxDecayMultiplierX24,
+    currentBlock: vector.currentBlock,
+    latestUpdateBlock: vector.latestUpdateBlock,
+    blockDelay: vector.blockDelay,
     amountIn: vector.amountIn,
     feeMultiplier: vector.feeMultiplier,
   };
@@ -430,6 +455,10 @@ function assertUpdateVector(vector, simulation, quoteOperation, label) {
 
   const postUpdateQuote = quoteOperation({
     sqrtPriceX96: update.anchorPriceAfter,
+    maxDecayMultiplierX24: vector.maxDecayMultiplierX24,
+    currentBlock: vector.currentBlock,
+    latestUpdateBlock: vector.currentBlock,
+    blockDelay: vector.blockDelay,
     feeAskX24: Number(update.feeAskX24After),
     feeBidX24: Number(update.feeBidX24After),
     reserveX: update.reserveXAfter,
@@ -525,6 +554,7 @@ const BASE_PARAMS = {
   reserveX: "1000000",
   reserveY: "1000000",
   maxPunishmentX24: 0,
+  maxDecayMultiplierX24: "0", currentBlock: "100", latestUpdateBlock: "100", blockDelay: "10",
   amountIn: "1000",
 };
 
@@ -539,13 +569,14 @@ describe("immediate-punishment split regression", () => {
       reserveX: total,
       reserveY: total,
       maxPunishmentX24: MAX_U24,
+      maxDecayMultiplierX24: "0", currentBlock: "100", latestUpdateBlock: "100", blockDelay: "10",
       feeMultiplier: "1",
     };
 
     const single = simulateXToY({ ...base, amountIn: total });
     assert.equal(single.status, SwapSimulationStatus.Applied);
-    assert.equal(single.amountOut, "500000000000000000000000");
-    assert.equal(single.feeBidX24After, 8_388_608);
+    assert.equal(single.amountOut, "875000000000000000000000");
+    assert.equal(single.feeBidX24After, 2_097_152);
 
     let splitParams = { ...base, amountIn: chunk };
     let splitTotalOut = 0n;
@@ -563,8 +594,8 @@ describe("immediate-punishment split regression", () => {
       };
     }
 
-    assert.equal(splitTotalOut, 724_999_934_434_890_747_070_315n);
-    assert.equal(finalSplit.feeBidX24After, 8_388_610);
+    assert.equal(splitTotalOut, 999_312_406_778_335_571_289_065n);
+    assert.equal(finalSplit.feeBidX24After, 20_971);
     assert.ok(splitTotalOut > BigInt(single.amountOut));
   });
 });
@@ -638,5 +669,54 @@ describe("Q64.96 converter helpers", () => {
     assert.equal(price_to_sqrt_price_x96(1), Q96);
     assert.equal(sqrtPriceX96ToPrice(Q96), 1);
     assert.equal(sqrt_price_x96_to_price(Q96), 1);
+  });
+});
+
+
+describe("cubic price age", () => {
+  const aged = { ...BASE_PARAMS, reserveX: "100000000", reserveY: "100000000",
+    feeAskX24: 10000, feeBidX24: 10000, amountIn: "16777216",
+    maxDecayMultiplierX24: "50331648", latestUpdateBlock: "100", blockDelay: "10" };
+  it("matches contract golden fees in both directions through the inclusive deadline", () => {
+    for (const quote of [quoteXToY, quoteYToX]) {
+      for (const [age, fee] of [[0,10000], [1,10020], [5,12500], [9,24580], [10,30000]]) {
+        const result = quote({ ...aged, currentBlock: String(100 + age) });
+        assert.equal(result.fee, String(fee));
+        assert.equal(result.effectiveFeeX24, 10000);
+      }
+    }
+    assert.equal(quoteXToY({ ...aged, currentBlock: "111" }).amountOut, "0");
+    const stale = simulateXToY({ ...aged, currentBlock: "111" });
+    assert.equal(stale.status, SwapSimulationStatus.StalePrice);
+    assert.equal(stale.appliedPunishmentX24, 0);
+    assert.equal(stale.reserveXAfter, aged.reserveX);
+    assert.equal(stale.feeBidX24After, aged.feeBidX24);
+  });
+  it("persists the unaged punishment and accepts the full uint64 multiplier", () => {
+    const result = simulateXToY({ ...aged, reserveX: "500000", reserveY: "500000",
+      currentBlock: "105", amountIn: "1000", maxPunishmentX24: 16778 });
+    assert.equal(result.feeBidX24After, 10001);
+    const saturated = simulateXToY({ ...aged, currentBlock: "101", maxDecayMultiplierX24: "18446744073709551615" });
+    assert.equal(saturated.status, SwapSimulationStatus.SwapImpossible);
+    assert.throws(() => quoteXToY({ ...aged, maxDecayMultiplierX24: "18446744073709551616" }), /uint64/);
+    assert.throws(() => quoteXToY({ ...aged, currentBlock: "99" }), /precedes/);
+    assert.throws(() => quoteXToY({ ...aged, blockDelay: "281474976710656" }), /uint48/);
+  });
+  it("prices and certifies the last execution block without aging stored fees", () => {
+    const snapshot = activeOrderBookParams({ reserveX: "100000000", reserveY: "100000000",
+      feeAskX24: 10000, feeBidX24: 10000, maxDecayMultiplierX24: "50331648",
+      snapshotBlock: "100", latestUpdateBlock: "100", maxExecutionBlock: "110", blockDelay: "10",
+      xToYSizes: ["16777216"], yToXSizes: [] });
+    const book = buildOrderBook(snapshot);
+    assert.equal(book.status, OrderBookStatus.Active);
+    assert.equal(book.xToY.levels[0].price, "998211860656738281");
+    const policy = { xToY: { minInput: "1000", lotInput: "1000", maxInput: "2000", totalInput: "3000" }, maxTransitions: 1000 };
+    for (const result of [buildValidatedOrderBook(snapshot, policy), buildPreciseOrderBook(snapshot, policy,
+      { maxLevels: 4, targetUnderquoteBps: 1, maxWork: 100000 }) .validated]) {
+      for (const age of [0, 5, 10]) {
+        const quote = quoteXToY({ ...snapshot, currentBlock: String(100 + age), amountIn: "1000" });
+        assert.ok(BigInt(ladderAmountOut(result.book.xToY.levels, "1000")) <= BigInt(quote.amountOut));
+      }
+    }
   });
 });

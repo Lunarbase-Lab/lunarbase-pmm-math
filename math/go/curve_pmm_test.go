@@ -18,6 +18,7 @@ func u(s string) *uint256.Int {
 
 func testPool() *PoolParams {
 	return &PoolParams{
+		BlockDelay:       1,
 		SqrtPriceX96:     new(uint256.Int).Set(q96),
 		FeeAskX24:        0,
 		FeeBidX24:        0,
@@ -31,6 +32,7 @@ func TestValidatePoolParamsWidths(t *testing.T) {
 	max160 := new(uint256.Int).Sub(new(uint256.Int).Lsh(uint256.NewInt(1), 160), uint256.NewInt(1))
 	max112 := new(uint256.Int).Sub(new(uint256.Int).Lsh(uint256.NewInt(1), 112), uint256.NewInt(1))
 	valid := &PoolParams{
+		BlockDelay:       1,
 		SqrtPriceX96:     max160,
 		FeeAskX24:        MaxUint24,
 		FeeBidX24:        MaxUint24,

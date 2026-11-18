@@ -1,6 +1,7 @@
 # Benchmarks
 
-These benchmarks cover the 0.4 punishment-era kernel. Results from the former
+Recorded timings below describe the earlier linear-punishment 0.4 kernel;
+rerun the commands for the cubic punishment and price-age implementation. Results from the former
 concentration curve are not comparable: quotes are now linear at the anchor,
 and every triggering quote includes an immediate directional fee transition
 that is persisted only after successful settlement.

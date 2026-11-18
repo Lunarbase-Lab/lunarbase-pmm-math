@@ -107,6 +107,13 @@ pub async fn refresh_canonical_snapshot(
         .map_err(|_| eyre::eyre!("maxPunishmentX24 RPC call failed"))?
         ._0
         .to();
+    let max_decay_multiplier_x24: u64 = contract
+        .maxDecayMultiplierX24()
+        .block(block)
+        .call()
+        .await
+        .map_err(|_| eyre::eyre!("maxDecayMultiplierX24 RPC call failed"))?
+        ._0;
     let block_delay: u64 = contract
         .blockDelay()
         .block(block)
@@ -157,6 +164,7 @@ pub async fn refresh_canonical_snapshot(
         reserve_x,
         reserve_y,
         max_punishment_x24,
+        max_decay_multiplier_x24,
         block_delay,
         paused,
         fee_multiplier: if caller_whitelisted {
@@ -192,6 +200,7 @@ pub async fn refresh_canonical_snapshot(
         fee_bid_x24,
         latest_update_block,
         max_punishment_x24,
+        max_decay_multiplier_x24,
         block_delay,
         paused,
         caller_whitelisted,

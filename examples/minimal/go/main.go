@@ -14,6 +14,10 @@ import (
 func main() {
 	p := new(uint256.Int).Lsh(uint256.NewInt(1), 96)
 	params := &pmm.PoolParams{
+		BlockDelay:            10,
+		CurrentBlock:          105,
+		LatestUpdateBlock:     100,
+		MaxDecayMultiplierX24: 3 * uint64(pmm.Q24Scale),
 		// Q64.96 = 2^96 represents price = 1.0.
 		SqrtPriceX96:     p,
 		FeeAskX24:        (1 << 24) / 1_000, // 0.10%
@@ -29,12 +33,16 @@ func main() {
 		dx.Dec(), r.AmountOut.Dec(), r.Fee.Dec(), r.EffectiveFeeX24, r.SqrtPriceNext.Dec())
 
 	after := &pmm.PoolParams{
-		SqrtPriceX96:     new(uint256.Int).Set(params.SqrtPriceX96),
-		FeeAskX24:        params.FeeAskX24,
-		FeeBidX24:        params.FeeBidX24,
-		ReserveX:         new(uint256.Int).Set(params.ReserveX),
-		ReserveY:         new(uint256.Int).Set(params.ReserveY),
-		MaxPunishmentX24: params.MaxPunishmentX24,
+		BlockDelay:            params.BlockDelay,
+		CurrentBlock:          params.CurrentBlock,
+		LatestUpdateBlock:     params.LatestUpdateBlock,
+		MaxDecayMultiplierX24: params.MaxDecayMultiplierX24,
+		SqrtPriceX96:          new(uint256.Int).Set(params.SqrtPriceX96),
+		FeeAskX24:             params.FeeAskX24,
+		FeeBidX24:             params.FeeBidX24,
+		ReserveX:              new(uint256.Int).Set(params.ReserveX),
+		ReserveY:              new(uint256.Int).Set(params.ReserveY),
+		MaxPunishmentX24:      params.MaxPunishmentX24,
 	}
 	simulation, err := pmm.SimulateStandardTokenSwap(after, dx, pmm.DirectionXToY)
 	if err != nil {

@@ -19,6 +19,10 @@ fn main() {
         reserve_y: 1_000_000_000,
         // A full-inventory swap can add at most 10% to its direction's fee.
         max_punishment_x24: Q24 / 10,
+        max_decay_multiplier_x24: 3 * u64::from(Q24),
+        current_block: 105,
+        latest_update_block: 100,
+        block_delay: 10,
     };
 
     // Aggregator/execution-adapter callers are whitelisted and therefore use
@@ -30,8 +34,7 @@ fn main() {
         "X->Y  in={dx}  out={}  fee={}  effectiveFee={}  pNext={}",
         r.amount_out, r.fee, r.effective_fee_x24, r.sqrt_price_next
     );
-    let simulation =
-        simulate_successful_swap(&params, dx, Direction::XToY, fee_multiplier);
+    let simulation = simulate_successful_swap(&params, dx, Direction::XToY, fee_multiplier);
     println!(
         "      desiredPunishment={} appliedPunishment={} nextBidFee={}",
         simulation.punishment.desired_punishment_x24,

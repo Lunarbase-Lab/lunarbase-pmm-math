@@ -525,7 +525,7 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "example-rust"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "lunarbase-pmm-math",
  "ruint",
@@ -789,7 +789,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "lunarbase-pmm-math"
-version = "0.4.1"
+version = "0.5.0"
 dependencies = [
  "ruint",
 ]

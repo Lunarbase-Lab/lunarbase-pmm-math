@@ -49,6 +49,7 @@ const snapshot: OrderBookSnapshot = {
   reserveX: cached.reserveX,
   reserveY: cached.reserveY,
   maxPunishmentX24: cached.maxPunishmentX24,
+  maxDecayMultiplierX24: cached.maxDecayMultiplierX24,
   feeMultiplier: cached.adapterFeeMultiplier,
   snapshotBlock: cached.blockNumber,
   // Must cover the complete signed TTL, not only the next block.
@@ -73,14 +74,15 @@ const config = {
 };
 // All buckets/config belong to the same block snapshot and exact Pool caller.
 // partnerFee uses Pool FeeManager.BPS = 1_000_000, not Q24.
-validateFeeAccountingCapacity(snapshot, config, {
+snapshot.feeAccounting = {
   partnerFee: cached.adapterPartnerFee,
   partnerOperatorPresent: cached.adapterPartnerOperator !== ZERO_ADDRESS,
   treasuryX: cached.treasuryFeesX, treasuryY: cached.treasuryFeesY,
   partnerX: cached.partnerFeesX, partnerY: cached.partnerFeesY,
   routerPartnerX: cached.adapterCumFeesX,
   routerPartnerY: cached.adapterCumFeesY,
-});
+};
+validateFeeAccountingCapacity(snapshot, config);
 const validated = buildValidatedOrderBook(snapshot, config);
 const { book } = validated;
 if (book.status !== OrderBookStatus.Active ||
@@ -132,18 +134,18 @@ publisher is not an on-chain cancellation. Always preserve `amountOutMinimum`
 in the adapter to reject under-delivery after external state changes.
 
 This is a price/reserve/punishment-model guarantee, not a promise that every EVM
-call succeeds. Its reserve transitions assume all charged fees are credited:
-either the adapter's `partnerFee` is zero, or its partner operator is nonzero.
-A positive partner share with no operator causes Pool to skip partner credit,
-so subtracting full gross output from active reserves would be incorrect.
+call succeeds. Reserve transitions retain treasury and debit only net output
+plus credited partner fees. Partner share and operator status come from
+`state.fee_accounting` (Node `snapshot.feeAccounting`) throughout the generation.
+
 Treasury, global partner, and per-router cumulative fee buckets are uint112 and
 can overflow independently of otherwise valid active reserves.
 
 Before signing, call `try_validate_fee_accounting_capacity` (Node:
 `validateFeeAccountingCapacity`) using the same snapshot. It rejects partner
 shares above `FeeManager.BPS = 1_000_000` and missing required operators. For an
-enabled output token it conservatively bounds all future charged fees by that
-token's initial active reserve plus its signed cumulative input cap, then
+enabled output token it bounds future charged fees by the opposite token's
+signed cumulative input cap converted at the anchor with nested floor rounding, then
 requires the relevant current fee buckets plus this bound to fit uint112.
 For a disabled output direction the bound is zero; zero-share buckets do not
 grow, but every supplied bucket is width-checked. The intentionally generous
@@ -155,7 +157,7 @@ preconditions. `SimulationStatus::Applied` describes the mathematical model,
 not arbitrary token calls or full EVM success.
 
 The initial stored reserves must also reconcile with `ERC20.balanceOf(Pool)`
-minus pending-deposit escrow and global treasury/partner fee buckets. A token
+minus pending-deposit escrow and credited global partner-fee buckets. A token
 donation can predate the snapshot without emitting Pool `Sync`; the next swap's
 `Sync` would then see a reserve change absent from the cached stored-reserve
 model. Reconcile that partition externally before claiming exact transitions.
@@ -268,6 +270,7 @@ Relevant state changes are:
 
 | Event/input | Cached fields |
 | --- | --- |
+| `MaxDecayMultiplierX24Set` | maximum cubic price-age multiplier; rebuild both ladders |
 | `StateUpdated` | anchor, ask, bid; `latestUpdateBlock = log.blockNumber` |
 | `PunishmentApplied` | absolute ask and bid from the event |
 | `Sync` | both active reserves |
@@ -284,9 +287,12 @@ Relevant state changes are:
 
 Freshness is checked at mandatory `maxExecutionBlock`, not merely at
 `snapshotBlock` or the first possible fill block. It is the conservative last
-block covered by the signed `expiresAt` policy. The builder rejects a bound
-before the snapshot and returns `Stale` when
-`maxExecutionBlock >= latestUpdateBlock + blockDelay`. If the publisher cannot
+block covered by the signed `expiresAt` policy. Every quote and reachable-fill constraint uses that last block's age, covering
+the greatest age fee within the signed lifetime. Gross reserve changes do not
+depend on age, and stored punishment excludes age scaling. Rust keeps the
+snapshot block in `OrderBookState.pool.current_block`, with update/delay fields
+in the same `PoolParams`. The builder rejects a bound before the snapshot and returns `Stale` when
+`maxExecutionBlock > latestUpdateBlock + blockDelay`. If the publisher cannot
 bound the block range of its wall-clock TTL, it must not treat this preflight as
 an execution guarantee; the adapter still fails closed on Pool freshness.
 

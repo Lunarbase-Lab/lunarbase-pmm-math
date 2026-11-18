@@ -24,6 +24,8 @@ const baseParams = {
   reserveY: "1000000000",
   // A full-inventory swap can add at most 10% to its direction's fee.
   maxPunishmentX24: Math.floor(Q24 / 10),
+  maxDecayMultiplierX24: String(3 * Q24),
+  currentBlock: "105", latestUpdateBlock: "100", blockDelay: "10",
 } as const;
 
 const xToY = quoteXToY({ ...baseParams, amountIn: "10000" });

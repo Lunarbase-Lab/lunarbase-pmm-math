@@ -48,8 +48,8 @@ manifest_uint() {
 }
 
 schema_version="$(manifest_uint schemaVersion)"
-if [[ "$schema_version" != "4" ]]; then
-  echo "unsupported parity schema: expected v4, got v$schema_version" >&2
+if [[ "$schema_version" != "6" ]]; then
+  echo "unsupported parity schema: expected v6, got v$schema_version" >&2
   exit 1
 fi
 fuzz_runs="$(manifest_uint fuzzRuns)"
@@ -116,6 +116,12 @@ verify_corpus() {
   fi
 }
 
+patch_hash="$(sha256_file "$REPO_ROOT/solidity-parity/active-treasury.patch")"
+if [[ "$patch_hash" != "$(manifest_string solidityOraclePatchSha256)" ]]; then
+  echo "active treasury oracle patch SHA-256 mismatch" >&2
+  exit 1
+fi
+
 verify_corpus \
   "Rust deterministic corpus" \
   "$RUST_VECTORS/deterministic_vectors.jsonl" \
@@ -166,7 +172,8 @@ if [[ -n "$DARK_POOLS_INPUT" ]]; then
   for entry in \
     "swapLibSha256:src/libraries/SwapLib.sol" \
     "peripheryLibSha256:src/libraries/PeripheryLib.sol" \
-    "poolSha256:src/Pool.sol"
+    "poolSha256:src/Pool.sol" \
+    "basePoolBridgeLibSha256:src/libraries/PoolBridgeLib.sol"
   do
     manifest_key="${entry%%:*}"
     relative_path="${entry#*:}"
@@ -177,6 +184,16 @@ if [[ -n "$DARK_POOLS_INPUT" ]]; then
       exit 1
     fi
   done
+  verify_root="$(mktemp -d "${TMPDIR:-/tmp}/lunarbase-pmm-verify.XXXXXX")"
+  trap 'rm -rf "$verify_root"' EXIT
+  mkdir -p "$verify_root/src/libraries"
+  cp "$DARK_CONTRACTS/src/libraries/PoolBridgeLib.sol" "$verify_root/src/libraries/PoolBridgeLib.sol"
+  patch --silent -p1 -d "$verify_root" < "$REPO_ROOT/solidity-parity/active-treasury.patch"
+  if [[ "$(sha256_file "$verify_root/src/libraries/PoolBridgeLib.sol")" != "$(manifest_string poolBridgeLibSha256)" ]]; then
+    echo "patched PoolBridgeLib SHA-256 mismatch" >&2
+    exit 1
+  fi
+
 fi
 
 echo "Verified schema-v$schema_version Solidity parity corpus: $deterministic_rows deterministic + $fuzz_rows fuzz rows"

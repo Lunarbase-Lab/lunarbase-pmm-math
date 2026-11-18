@@ -1,5 +1,5 @@
 //! Pure Rust mirror of LunarBase linear anchor quotes and directional
-//! punishment state transitions.
+//! cubic punishment and price-age spread transitions.
 //!
 //! The crate is bit-for-bit identical with the on-chain Solidity reference
 //! (current Q64.96 `uint160` sqrt-price design), validated by
@@ -21,6 +21,10 @@
 //!     reserve_x: 1_000_000,
 //!     reserve_y: 1_000_000,
 //!     max_punishment_x24: Q24 / 1_000, // maximum 0.10% increment
+//!     max_decay_multiplier_x24: 3 * u64::from(Q24),
+//!     current_block: 105,
+//!     latest_update_block: 100,
+//!     block_delay: 10,
 //! };
 //! let result = quote_x_to_y(&params, U256::from(1_000u64));
 //! let non_whitelisted = quote_x_to_y_with_multiplier(&params, U256::from(1_000u64), U256::from(100u64));
@@ -54,11 +58,12 @@ pub use mechanism::{
     apply_fee, apply_punishment, apply_update, price_to_sqrt_price_x96, punishment_x24,
     quote_x_to_y, quote_x_to_y_with_multiplier, quote_y_to_x, quote_y_to_x_with_multiplier,
     simulate_successful_swap, sqrt_price_x96_to_price, try_apply_fee, try_apply_punishment,
-    try_apply_update, try_punishment_transition, try_punishment_x24, try_quote_x_to_y,
-    try_quote_x_to_y_with_multiplier, try_quote_y_to_x, try_quote_y_to_x_with_multiplier,
-    try_simulate_successful_swap, try_x_value_in_y, x_value_in_y, Direction, MathError, PoolParams,
-    PunishmentTransition, QuoteResult, RollbackReason, SimulationStatus, SwapSimulation,
-    MAX_PUNISHMENT_X24, MAX_U112, MAX_U160, MAX_U24, Q24, Q96,
+    try_apply_update, try_decay_fee_x24, try_punishment_transition, try_punishment_x24,
+    try_quote_x_to_y, try_quote_x_to_y_with_multiplier, try_quote_y_to_x,
+    try_quote_y_to_x_with_multiplier, try_simulate_successful_swap,
+    try_simulate_successful_swap_with_fee_accounting, try_x_value_in_y, x_value_in_y, Direction,
+    MathError, PoolParams, PunishmentTransition, QuoteResult, RollbackReason, SimulationStatus,
+    SwapSimulation, MAX_PUNISHMENT_X24, MAX_U112, MAX_U160, MAX_U24, MAX_U48, Q24, Q96,
 };
 pub use order_book::{
     geometric_sizes, try_build_order_book, try_ladder_amount_out, try_ladder_amount_out_at_cursor,

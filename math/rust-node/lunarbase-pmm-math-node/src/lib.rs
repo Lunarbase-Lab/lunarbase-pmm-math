@@ -9,7 +9,7 @@ use lunarbase_pmm_math::{
     geometric_sizes as internal_geometric_sizes, price_to_sqrt_price_x96, sqrt_price_x96_to_price,
     try_build_order_book, try_build_precise_order_book, try_build_validated_order_book,
     try_ladder_amount_out_at_cursor, try_quote_x_to_y_with_multiplier,
-    try_quote_y_to_x_with_multiplier, try_simulate_successful_swap,
+    try_quote_y_to_x_with_multiplier, try_simulate_successful_swap_with_fee_accounting,
     try_validate_fee_accounting_capacity, Direction,
     DirectionalLadder as InternalDirectionalLadder,
     FeeAccountingState as InternalFeeAccountingState, FillPolicy as InternalFillPolicy, MathError,
@@ -139,6 +139,14 @@ pub struct QuoteParams {
     pub reserve_y: String,
     /// Maximum immediate directional punishment in Q24. Defaults to disabled.
     pub max_punishment_x24: Option<f64>,
+    /// Maximum cubic price-age multiplier (uint64 Q24), decimal or hex.
+    pub max_decay_multiplier_x24: String,
+    /// Block at which to evaluate the quote (uint64), decimal or hex.
+    pub current_block: String,
+    /// Latest operator update block (uint48), decimal or hex.
+    pub latest_update_block: String,
+    /// Inclusive nonzero freshness window (uint48), decimal or hex.
+    pub block_delay: String,
     /// Exact input amount (uint256), decimal or hex.
     pub amount_in: String,
     /// Caller-specific fee multiplier (uint256). Defaults to one.
@@ -151,7 +159,7 @@ pub struct QuoteResult {
     /// Always equals the operator anchor in the linear implementation.
     pub sqrt_price_next: String,
     pub fee: String,
-    /// Saturating directional fee used by this quote before feeMultiplier.
+    /// Persisted directional fee before the price-age and caller multipliers.
     pub effective_fee_x24: u32,
 }
 
@@ -169,6 +177,8 @@ pub struct BuildOrderBookParams {
     pub reserve_y: String,
     /// Maximum immediate directional punishment in Q24.
     pub max_punishment_x24: f64,
+    /// Maximum cubic price-age multiplier (uint64 Q24), decimal or hex.
+    pub max_decay_multiplier_x24: String,
     /// Resolved fee multiplier of the address that will call the Pool.
     pub fee_multiplier: String,
     /// Block number of the complete cached snapshot.
@@ -190,12 +200,16 @@ pub struct BuildOrderBookParams {
 /// Complete coherent snapshot for a policy-validated book.
 #[napi(object)]
 pub struct OrderBookSnapshot {
+    /// Router fee state from this snapshot; omitted means zero partner share and empty buckets.
+    pub fee_accounting: Option<FeeAccountingState>,
     pub sqrt_price_x96: String,
     pub fee_ask_x24: f64,
     pub fee_bid_x24: f64,
     pub reserve_x: String,
     pub reserve_y: String,
     pub max_punishment_x24: f64,
+    /// Maximum cubic price-age multiplier (uint64 Q24), decimal or hex.
+    pub max_decay_multiplier_x24: String,
     /// Fee multiplier of the exact adapter calling the Pool.
     pub fee_multiplier: String,
     pub snapshot_block: String,
@@ -325,6 +339,7 @@ pub struct OrderBookResult {
 
 #[napi(string_enum = "camelCase")]
 pub enum SwapSimulationStatus {
+    StalePrice,
     Applied,
     SwapImpossible,
     ReserveTransitionOverflow,
@@ -336,7 +351,7 @@ pub struct SwapSimulationResult {
     pub amount_out: String,
     pub sqrt_price_next: String,
     pub fee: String,
-    /// Saturating directional fee used by the current quote before multiplier.
+    /// Saturating directional fee used by the current quote before age and caller multipliers.
     pub effective_fee_x24: u32,
     /// True when the pure-math quote is nonzero and the standard-token uint112
     /// reserve transition fits. It does not predict external call failures.
@@ -375,6 +390,13 @@ fn to_pool_params(params: &QuoteParams) -> Result<(PoolParams, U256, U256)> {
         reserve_x,
         reserve_y,
         max_punishment_x24,
+        max_decay_multiplier_x24: parse_u64_field(
+            "maxDecayMultiplierX24",
+            &params.max_decay_multiplier_x24,
+        )?,
+        current_block: parse_u64_field("currentBlock", &params.current_block)?,
+        latest_update_block: parse_u64_field("latestUpdateBlock", &params.latest_update_block)?,
+        block_delay: parse_u64_field("blockDelay", &params.block_delay)?,
     };
     pool.validate().map_err(math_error)?;
     Ok((pool, amount_in, fee_multiplier))
@@ -382,12 +404,14 @@ fn to_pool_params(params: &QuoteParams) -> Result<(PoolParams, U256, U256)> {
 
 fn to_order_book_state(params: &BuildOrderBookParams) -> Result<OrderBookState> {
     to_order_book_snapshot(&OrderBookSnapshot {
+        fee_accounting: None,
         sqrt_price_x96: params.sqrt_price_x96.clone(),
         fee_ask_x24: params.fee_ask_x24,
         fee_bid_x24: params.fee_bid_x24,
         reserve_x: params.reserve_x.clone(),
         reserve_y: params.reserve_y.clone(),
         max_punishment_x24: params.max_punishment_x24,
+        max_decay_multiplier_x24: params.max_decay_multiplier_x24.clone(),
         fee_multiplier: params.fee_multiplier.clone(),
         snapshot_block: params.snapshot_block.clone(),
         max_execution_block: params.max_execution_block.clone(),
@@ -405,16 +429,26 @@ fn to_order_book_snapshot(params: &OrderBookSnapshot) -> Result<OrderBookState> 
         reserve_x: parse_u112_field("reserveX", &params.reserve_x)?,
         reserve_y: parse_u112_field("reserveY", &params.reserve_y)?,
         max_punishment_x24: parse_u24_field("maxPunishmentX24", params.max_punishment_x24)?,
+        max_decay_multiplier_x24: parse_u64_field(
+            "maxDecayMultiplierX24",
+            &params.max_decay_multiplier_x24,
+        )?,
+        current_block: parse_u64_field("snapshotBlock", &params.snapshot_block)?,
+        latest_update_block: parse_u64_field("latestUpdateBlock", &params.latest_update_block)?,
+        block_delay: parse_u64_field("blockDelay", &params.block_delay)?,
     };
     pool.validate().map_err(math_error)?;
 
     Ok(OrderBookState {
+        fee_accounting: params
+            .fee_accounting
+            .as_ref()
+            .map(to_fee_accounting)
+            .transpose()?
+            .unwrap_or_default(),
         pool,
         fee_multiplier: parse_u256(&params.fee_multiplier)?,
-        snapshot_block: parse_u64_field("snapshotBlock", &params.snapshot_block)?,
         max_execution_block: parse_u64_field("maxExecutionBlock", &params.max_execution_block)?,
-        latest_update_block: parse_u64_field("latestUpdateBlock", &params.latest_update_block)?,
-        block_delay: parse_u64_field("blockDelay", &params.block_delay)?,
         paused: params.paused,
     })
 }
@@ -501,6 +535,7 @@ fn quote(params: &QuoteParams, direction: Direction) -> Result<QuoteResult> {
 
 fn rollback_status(reason: &RollbackReason) -> SwapSimulationStatus {
     match reason {
+        RollbackReason::StalePrice => SwapSimulationStatus::StalePrice,
         RollbackReason::SwapImpossible => SwapSimulationStatus::SwapImpossible,
         RollbackReason::ReserveTransitionOverflow => {
             SwapSimulationStatus::ReserveTransitionOverflow
@@ -509,10 +544,24 @@ fn rollback_status(reason: &RollbackReason) -> SwapSimulationStatus {
     }
 }
 
-fn simulate(params: &QuoteParams, direction: Direction) -> Result<SwapSimulationResult> {
+fn simulate(
+    params: &QuoteParams,
+    direction: Direction,
+    accounting: Option<&FeeAccountingState>,
+) -> Result<SwapSimulationResult> {
     let (pool, amount_in, fee_multiplier) = to_pool_params(params)?;
-    let simulation = try_simulate_successful_swap(&pool, amount_in, direction, fee_multiplier)
-        .map_err(math_error)?;
+    let accounting = accounting
+        .map(to_fee_accounting)
+        .transpose()?
+        .unwrap_or_default();
+    let simulation = try_simulate_successful_swap_with_fee_accounting(
+        &pool,
+        amount_in,
+        direction,
+        fee_multiplier,
+        &accounting,
+    )
+    .map_err(math_error)?;
     let (executable, status) = match &simulation.status {
         SimulationStatus::Applied => (true, SwapSimulationStatus::Applied),
         SimulationStatus::RolledBack(reason) => (false, rollback_status(reason)),
@@ -546,13 +595,19 @@ pub fn quote_y_to_x_napi(params: QuoteParams) -> Result<QuoteResult> {
 }
 
 #[napi(js_name = "simulateXToY")]
-pub fn simulate_x_to_y_napi(params: QuoteParams) -> Result<SwapSimulationResult> {
-    simulate(&params, Direction::XToY)
+pub fn simulate_x_to_y_napi(
+    params: QuoteParams,
+    accounting: Option<FeeAccountingState>,
+) -> Result<SwapSimulationResult> {
+    simulate(&params, Direction::XToY, accounting.as_ref())
 }
 
 #[napi(js_name = "simulateYToX")]
-pub fn simulate_y_to_x_napi(params: QuoteParams) -> Result<SwapSimulationResult> {
-    simulate(&params, Direction::YToX)
+pub fn simulate_y_to_x_napi(
+    params: QuoteParams,
+    accounting: Option<FeeAccountingState>,
+) -> Result<SwapSimulationResult> {
+    simulate(&params, Direction::YToX, accounting.as_ref())
 }
 
 #[napi(js_name = "buildOrderBook")]
@@ -668,14 +723,7 @@ fn to_validated_config(
     })
 }
 
-/// Throws if fees would be left uncredited or conservative uint112 bucket
-/// headroom cannot be established for the signed input caps.
-#[napi(js_name = "validateFeeAccountingCapacity")]
-pub fn validate_fee_accounting_capacity_napi(
-    snapshot: OrderBookSnapshot,
-    config: ValidatedOrderBookConfig,
-    accounting: FeeAccountingState,
-) -> Result<()> {
+fn to_fee_accounting(accounting: &FeeAccountingState) -> Result<InternalFeeAccountingState> {
     if !accounting.partner_fee.is_finite()
         || accounting.partner_fee.fract() != 0.0
         || accounting.partner_fee < 0.0
@@ -685,9 +733,7 @@ pub fn validate_fee_accounting_capacity_napi(
             "partnerFee must be an integer in [0, 1000000]",
         ));
     }
-    let state = to_order_book_snapshot(&snapshot)?;
-    let config = to_validated_config(&config)?;
-    let accounting = InternalFeeAccountingState {
+    Ok(InternalFeeAccountingState {
         partner_fee: accounting.partner_fee as u32,
         partner_operator_present: accounting.partner_operator_present,
         treasury_x: parse_u112_field("treasuryX", &accounting.treasury_x)?,
@@ -696,8 +742,23 @@ pub fn validate_fee_accounting_capacity_napi(
         partner_y: parse_u112_field("partnerY", &accounting.partner_y)?,
         router_partner_x: parse_u112_field("routerPartnerX", &accounting.router_partner_x)?,
         router_partner_y: parse_u112_field("routerPartnerY", &accounting.router_partner_y)?,
-    };
-    try_validate_fee_accounting_capacity(&state, &config, &accounting)
+    })
+}
+
+/// Check uint112 fee headroom using the feeAccounting embedded in this snapshot.
+#[napi(js_name = "validateFeeAccountingCapacity")]
+pub fn validate_fee_accounting_capacity_napi(
+    snapshot: OrderBookSnapshot,
+    config: ValidatedOrderBookConfig,
+) -> Result<()> {
+    if snapshot.fee_accounting.is_none() {
+        return Err(Error::from_reason(
+            "feeAccounting is required for capacity preflight",
+        ));
+    }
+    let state = to_order_book_snapshot(&snapshot)?;
+    let config = to_validated_config(&config)?;
+    try_validate_fee_accounting_capacity(&state, &config)
         .map_err(|error| Error::from_reason(error.to_string()))
 }
 

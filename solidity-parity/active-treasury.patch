@@ -1,0 +1,7 @@
+--- a/src/libraries/PoolBridgeLib.sol
++++ b/src/libraries/PoolBridgeLib.sol
+@@ -46,2 +46,2 @@
+-        uint112 reserveX = (balanceX - uint256(positions.pendingDepositX) - uint256(fees.partnerFeesX) - uint256(fees.treasuryFeesX)).toUint112();
+-        uint112 reserveY = (balanceY - uint256(positions.pendingDepositY) - uint256(fees.partnerFeesY) - uint256(fees.treasuryFeesY)).toUint112();
++        uint112 reserveX = (balanceX - uint256(positions.pendingDepositX) - uint256(fees.partnerFeesX)).toUint112();
++        uint112 reserveY = (balanceY - uint256(positions.pendingDepositY) - uint256(fees.partnerFeesY)).toUint112();

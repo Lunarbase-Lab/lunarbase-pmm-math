@@ -14,6 +14,7 @@ sol! {
         );
         function anchorPrice() external view returns (uint160);
         function maxPunishmentX24() external view returns (uint24);
+        function maxDecayMultiplierX24() external view returns (uint64);
         function blockDelay() external view returns (uint48);
         function paused() external view returns (bool);
         function getXReserve() external view returns (uint112);

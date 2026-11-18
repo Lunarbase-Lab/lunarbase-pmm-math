@@ -8,14 +8,15 @@ use std::time::Instant;
 use lunarbase_pmm_math::{
     geometric_sizes, try_build_order_book, try_build_precise_order_book, try_ladder_amount_out,
     try_ladder_amount_out_at_cursor, try_quote_x_to_y_with_multiplier,
-    try_simulate_successful_swap, try_validate_fee_accounting_capacity, Direction,
-    FeeAccountingState, FillPolicy, OrderBook, OrderBookConfig, OrderBookPrecision, OrderBookState,
-    PoolParams, SimulationStatus, U256Ext, ValidatedOrderBookConfig, Q24, Q96, U256,
+    try_simulate_successful_swap, try_validate_fee_accounting_capacity, Direction, FillPolicy,
+    OrderBook, OrderBookConfig, OrderBookPrecision, OrderBookState, PoolParams, SimulationStatus,
+    U256Ext, ValidatedOrderBookConfig, Q24, Q96, U256,
 };
 use serde_json::json;
 
 fn snapshot(max_punishment_x24: u32) -> OrderBookState {
     OrderBookState {
+        fee_accounting: lunarbase_pmm_math::FeeAccountingState::default(),
         pool: PoolParams {
             // floor(sqrt(2500 * 10^(6-18)) * Q96): no floating point input.
             sqrt_price_x96: Q96 / U256::from(20_000u64),
@@ -24,12 +25,13 @@ fn snapshot(max_punishment_x24: u32) -> OrderBookState {
             reserve_x: 100 * 10u128.pow(18),
             reserve_y: 250_000 * 10u128.pow(6),
             max_punishment_x24,
+            max_decay_multiplier_x24: 0,
+            current_block: 100,
+            latest_update_block: 100,
+            block_delay: 20,
         },
         fee_multiplier: U256::from(1),
-        snapshot_block: 100,
         max_execution_block: 105,
-        latest_update_block: 100,
-        block_delay: 20,
         paused: false,
     }
 }
@@ -157,7 +159,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ("weth_usdc_high_punishment", Q24 / 10),
     ] {
         let state = snapshot(punishment);
-        try_validate_fee_accounting_capacity(&state, &config, &FeeAccountingState::default())?;
+        try_validate_fee_accounting_capacity(&state, &config)?;
         let edges = constraints(&state, &config)?;
         let x_sizes = geometric_sizes(config.x_to_y.unwrap().total_input, 20)?;
         let y_sizes = geometric_sizes(config.y_to_x.unwrap().total_input, 20)?;
@@ -212,6 +214,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                             "feeAskX24": state.pool.fee_ask_x24,
                             "feeBidX24": state.pool.fee_bid_x24,
                             "maxPunishmentX24": punishment,
+                            "maxDecayMultiplierX24": state.pool.max_decay_multiplier_x24.to_string(),
+                            "snapshotBlock": state.pool.current_block.to_string(),
+                            "latestUpdateBlock": state.pool.latest_update_block.to_string(),
+                            "blockDelay": state.pool.block_delay.to_string(),
+                            "maxExecutionBlock": state.max_execution_block.to_string(),
                             "lotsPerDirection": 8,
                             "maxFillLots": 2,
                             "maxLevels": max_levels,

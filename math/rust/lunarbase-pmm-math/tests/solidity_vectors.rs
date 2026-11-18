@@ -1,4 +1,4 @@
-//! Bit-for-bit replay of schema-v4 vectors produced by the Solidity oracle.
+//! Bit-for-bit replay of schema-v6 vectors produced by the Solidity oracle.
 
 use serde::Deserialize;
 
@@ -14,6 +14,7 @@ enum VectorOutcome {
     SwapImpossible,
     ReserveTransitionOverflow,
     MathMulDivRevert,
+    StalePrice,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,6 +46,10 @@ struct Vector {
     reserve_x: String,
     reserve_y: String,
     max_punishment_x24: String,
+    max_decay_multiplier_x24: String,
+    current_block: String,
+    latest_update_block: String,
+    block_delay: String,
     fee_multiplier: String,
     amount_in: String,
     amount_out: String,
@@ -104,6 +109,7 @@ fn parse_u32(value: &str) -> u32 {
 
 fn expected_revert(outcome: VectorOutcome) -> (&'static str, &'static str) {
     match outcome {
+        VectorOutcome::StalePrice => ("0x19abf40e", "StalePrice()"),
         VectorOutcome::Applied => ("0x00000000", "None"),
         VectorOutcome::SwapImpossible => ("0x4a45e749", "SwapImpossible()"),
         VectorOutcome::ReserveTransitionOverflow => (
@@ -132,7 +138,7 @@ fn replay(path: &str, data: &str) {
         let vector: Vector = serde_json::from_str(line)
             .unwrap_or_else(|error| panic!("{path}:{line_number}: invalid JSON: {error}"));
         assert_eq!(
-            vector.schema_version, 4,
+            vector.schema_version, 6,
             "{path}:{line_number}: unsupported schema"
         );
         let label = format!("{path}:{}", vector.label(line_number));
@@ -156,6 +162,10 @@ fn replay(path: &str, data: &str) {
             reserve_x: parse_u128(&vector.reserve_x),
             reserve_y: parse_u128(&vector.reserve_y),
             max_punishment_x24: parse_u32(&vector.max_punishment_x24),
+            max_decay_multiplier_x24: vector.max_decay_multiplier_x24.parse().unwrap(),
+            current_block: vector.current_block.parse().unwrap(),
+            latest_update_block: vector.latest_update_block.parse().unwrap(),
+            block_delay: vector.block_delay.parse().unwrap(),
         };
         let amount_in = parse_u256(&vector.amount_in);
         let fee_multiplier = parse_u256(&vector.fee_multiplier);
@@ -220,6 +230,7 @@ fn replay(path: &str, data: &str) {
         let simulation = simulation_result
             .unwrap_or_else(|error| panic!("{label}: Rust simulation reverted: {error}"));
         let expected_status = match vector.outcome {
+            VectorOutcome::StalePrice => SimulationStatus::RolledBack(RollbackReason::StalePrice),
             VectorOutcome::Applied => {
                 applied += 1;
                 SimulationStatus::Applied

@@ -55,6 +55,7 @@ warm in cache:
 | `anchorPrice`, `feeAskX24`, `feeBidX24`, `latestUpdateBlock` | block-pinned `state()` | Anchor, current directional fees, and freshness origin |
 | `reserveX`, `reserveY` | block-pinned `getXReserve()` / `getYReserve()` | Active reserves from the same block as every other field |
 | `maxPunishmentX24` | block-pinned `maxPunishmentX24()` | Maximum immediate directional fee increment |
+| `maxDecayMultiplierX24` | block-pinned `maxDecayMultiplierX24()` | uint64 maximum cubic price-age multiplier, serialized as decimal text |
 | `blockDelay` | block-pinned `blockDelay()` | Fail-closed operator-update freshness check |
 | `paused` | block-pinned `paused()` | Do not quote executable swaps while paused |
 | `isWhitelisted(QUOTE_CALLER_ADDRESS)` | block-pinned `isWhitelisted()` | Decides whether multiplier is `1` |
@@ -188,3 +189,8 @@ For multiple execution callers, use one caller-scoped namespace each.
 
 See [`math/rust/lunarbase-pmm-math`](../../math/rust/lunarbase-pmm-math) for
 the quoter API.
+
+The canonical snapshot includes `maxDecayMultiplierX24` and feeds its confirmed
+head, update block, and delay into the math snapshot. Freshness is inclusive;
+only the unaged punishment fee is persisted by swaps. Refresh all fields from
+the same block hash after each confirmed head.

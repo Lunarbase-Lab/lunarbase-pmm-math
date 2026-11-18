@@ -12,7 +12,7 @@ use crate::pool_state::PoolState;
 pub struct Quote {
     pub amount_out: U256,
     pub fee: U256,
-    /// Directional fee used by the current quote before caller multiplier.
+    /// Directional fee used by the current quote before age and caller multipliers.
     pub effective_fee_x24: u32,
     /// Unchanged Q64.96 operator anchor retained by the Solidity quote ABI.
     pub sqrt_price_next: U256,
@@ -106,12 +106,34 @@ mod tests {
             reserve_x: (1u128 << 112) - 1,
             reserve_y: (1u128 << 112) - 1,
             max_punishment_x24: 0,
+            max_decay_multiplier_x24: 0,
             block_delay: 10,
             paused: false,
             fee_multiplier: U256::from(1u64),
             caller_whitelisted: true,
             blacklist_fee_multiplier: U256::from(2u64),
         }
+    }
+
+    #[test]
+    fn canonical_snapshot_applies_age_and_accepts_the_last_fresh_block() {
+        let mut snapshot = state();
+        snapshot.sqrt_price_x96 = U256::from(1u64) << 96;
+        snapshot.latest_update_block = 100;
+        snapshot.snapshot_block = 105;
+        snapshot.block_delay = 10;
+        snapshot.reserve_x = 100_000_000;
+        snapshot.reserve_y = 100_000_000;
+        snapshot.fee_bid_x24 = 10_000;
+        snapshot.max_punishment_x24 = 0;
+        snapshot.max_decay_multiplier_x24 = 3 * (1 << 24);
+        snapshot.fee_multiplier = U256::from(1);
+        let quote = quote_from_snapshot(&snapshot, U256::from(1 << 24), true).unwrap();
+        assert_eq!(quote.fee, U256::from(12_500));
+        snapshot.snapshot_block = 110;
+        assert!(quote_from_snapshot(&snapshot, U256::from(1 << 24), true).is_ok());
+        snapshot.snapshot_block = 111;
+        assert!(quote_from_snapshot(&snapshot, U256::from(1 << 24), true).is_err());
     }
 
     #[test]
